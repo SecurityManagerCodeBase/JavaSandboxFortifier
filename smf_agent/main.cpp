@@ -260,6 +260,7 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	char* method_name = NULL;
 	jclass caller_class = NULL;
 	char* source_file_name = NULL;
+	JavaVM* jvm;
 
 	// Get caller (we have to do this because we are in setSecurityManager when
 	// this method is called);
@@ -289,7 +290,14 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 
 	// If new_value is full a null SecurityManager raise a red flag
 	if ((long)new_value.j == 0) {
-		logger->warn("WARNING: The SecurityManager is being disabled!!!\n");
+		if (opt.mode == MONITOR) {
+			logger->warn("The SecurityManager is being disabled!!!\n");
+		} else if (opt.mode == ENFORCE) {
+			logger->fatal("The SecurityManager is being disabled. Terminating the running application...");
+			jni_env->GetJavaVM(&jvm);
+			// TODO: Why is this core dumping? Is there a better way? Does it work on Windows?
+			jvm->DestroyJavaVM();
+		}
 	} else {
 		//jclass new_manager = jni_env->GetObjectClass(new_value.l);
 		// TODO: This is where we may do something with the new manager in the plugin
