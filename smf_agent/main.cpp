@@ -9,6 +9,8 @@
  */
 #include <jvmti.h>
 #include <string.h>
+#include <log4cpp/Category.hh>
+#include <log4cpp/PropertyConfigurator.hh>
 
 void JNICALL VMInit(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread);
 void check_jvmti_error(jvmtiEnv *jvmti, jvmtiError errnum, const char *str);
@@ -19,6 +21,8 @@ void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jclass field_klass, jobject object, jfieldID field,
                 char signature_type, jvalue new_value);
 
+log4cpp::Category* logger = NULL;
+
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
 	jvmtiEnv* jvmti = NULL;
 	jvmtiCapabilities capabilities;
@@ -28,10 +32,20 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	memset(&capabilities, 0, sizeof(capabilities));
 	memset(&callbacks, 0, sizeof(callbacks));
 
+	// Start the logger
+	// TODO: Need to make this easier to find without knowing cwd (use SMF_HOME env var?)
+	log4cpp::PropertyConfigurator::configure("smf_agent/log4cpp.properties");
+	logger = &log4cpp::Category::getRoot();
+
+	if (logger == NULL) {
+		printf("Failed to get logger. Terminating...");
+		return -1;
+	}
+
 	// Get JVMTI environment
 	jint env_error = jvm->GetEnv((void **)&jvmti, JVMTI_VERSION_1_0);
 	if (env_error != JNI_OK || jvmti == NULL) {
-		printf("Failed to get JVMTI environment.");
+		logger->fatal("Failed to get JVMTI environment.");
 		return env_error;
 	}
 
@@ -65,6 +79,11 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	return JNI_OK;
 }
 
+JNIEXPORT void JNICALL Agent_OnUnload(JavaVM* jvm)
+{
+	log4cpp::Category::shutdown();
+}
+
 void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 	jclass system_class;
 	jfieldID securityID; 
@@ -82,12 +101,13 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 	check_jvmti_error(jvmti, error, "Unable to set a watch on modifications of security field of System class.");
 }
 
-void print_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
+void log_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 {
     char* errnum_str = NULL;
 
     jvmti->GetErrorName(errnum, &errnum_str);
-    printf("ERROR: JVMTI: %d(%s): %s\n", errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
+
+    logger->error("JVMTI: %d(%s): %s\n", errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
 		str == NULL ? "" : str);
 
 	jvmti->Deallocate((unsigned char*)errnum_str);
@@ -96,7 +116,7 @@ void print_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 void check_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 {
     if (errnum != JVMTI_ERROR_NONE)
-        print_jvmti_error(jvmti, errnum, str);
+        log_jvmti_error(jvmti, errnum, str);
 }
 
 /**
@@ -220,13 +240,13 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 
 	// If new_value is full a null SecurityManager raise a red flag
 	if ((long)new_value.j == 0) {
-		printf("WARNING: The SecurityManager is being disabled!!!\n");
+		logger->warn("WARNING: The SecurityManager is being disabled!!!\n");
 	} else {
 		//jclass new_manager = jni_env->GetObjectClass(new_value.l);
 		// TODO: This is where we may do something with the new manager in the plugin
 	}
 
-	printf("SecurityManager Changed:\n%s, %s, %d\n\n", source_file_name, method_name, line_number);
+	logger->warn("SecurityManager Changed:\n%s, %s, %d\n\n", source_file_name, method_name, line_number);
 
 	jvmti->Deallocate((unsigned char*)line_table);
 	jvmti->Deallocate((unsigned char*)method_name);

@@ -2,6 +2,7 @@
 INCLUDES=$(JAVA_HOME)/include
 CC = g++
 CFLAGS = -Wall -pedantic -fPIC -shared
+CLIBS = -llog4cpp
 
 JCC = javac
 
@@ -14,16 +15,16 @@ buildtests:
 	$(JCC) Main.java; \
 	cd ../../../../../../; \
 	mkdir -p bin/isr/cmu/edu/smf/test; \
-	mv src/isr/cmu/edu/smf/test/Main.class bin/isr/cmu/edu/smf/test/Main.class
+	mv src/isr/cmu/edu/smf/test/*.class bin/isr/cmu/edu/smf/test/
 	cd ..;
 
 buildagent:
 	cd smf_agent; \
-	$(CC) $(CFLAGS) -I$(INCLUDES) -o libsmf.so main.cpp; \
+	$(CC) -I$(INCLUDES) $(CFLAGS) -o libsmf.so main.cpp $(CLIBS); \
 	cd ..;
 
 run:
-	LD_LIBRARY_PATH=smf_agent java -agentlib:smf -classpath SecurityManagerTestCases/bin isr.cmu.edu.smf.test.Main
+	java -agentpath:smf_agent/libsmf.so -classpath SecurityManagerTestCases/bin isr.cmu.edu.smf.test.Main
 
 clean:
 	-rm -f smf_agent/libsmf.so
