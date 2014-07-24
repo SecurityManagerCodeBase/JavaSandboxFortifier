@@ -9,10 +9,15 @@
  */
 #include <jvmti.h>
 #include <string.h>
+#include <iostream>
+#include <fstream>
 #include <log4cpp/Category.hh>
 #include <log4cpp/PropertyConfigurator.hh>
+#include <boost/program_options.hpp>
+
 
 void JNICALL VMInit(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread);
+bool GetOptions();
 void check_jvmti_error(jvmtiEnv *jvmti, jvmtiError errnum, const char *str);
 jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* klass);
 jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID);
@@ -20,6 +25,14 @@ void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
                 char signature_type, jvalue new_value);
+
+enum smf_mode_t {MONITOR, ENFORCE};
+
+struct options {
+  smf_mode_t mode;
+};
+
+options opt;
 
 log4cpp::Category* logger = NULL;
 
@@ -39,6 +52,11 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 
 	if (logger == NULL) {
 		printf("Failed to get logger. Terminating...");
+		return -1;
+	}
+
+	// Get the options
+	if (!GetOptions()) {
 		return -1;
 	}
 
@@ -99,6 +117,37 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 
 	error = jvmti->SetFieldModificationWatch(system_class, securityID);
 	check_jvmti_error(jvmti, error, "Unable to set a watch on modifications of security field of System class.");
+}
+
+/**
+ * @brief	reads the smf properties file and populates the global opt struct with the correct values
+ *
+ * @retval	true if all of the options in the properties are valid, false and a fatal log message otherwise
+ */
+bool GetOptions() {
+	// TODO: Need to make this easier to find without knowing cwd (use SMF_HOME env var?)
+	std::string mode;
+	
+	std::ifstream settings_file("smf_agent/smf.properties");
+	boost::program_options::options_description desc("Options");
+	desc.add_options()
+		("mode", boost::program_options::value<std::string>(&mode), "mode");
+	boost::program_options::variables_map vm = boost::program_options::variables_map();
+
+	boost::program_options::store(boost::program_options::parse_config_file(settings_file , desc), vm);
+	boost::program_options::notify(vm);  
+	settings_file.close();
+
+	if (strcasecmp(mode.c_str(), "MONITOR") == 0) {
+		opt.mode = MONITOR;
+	} else if (strcasecmp(mode.c_str(), "ENFORCE") == 0) {
+		opt.mode = ENFORCE;
+	} else {
+		logger->fatal("Option value unknown: %s. Terminating...");
+		return false;
+	}
+
+	return true;
 }
 
 void log_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)

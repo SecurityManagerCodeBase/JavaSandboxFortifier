@@ -2,7 +2,7 @@
 INCLUDES=$(JAVA_HOME)/include
 CC = g++
 CFLAGS = -Wall -pedantic -fPIC -shared
-CLIBS = -llog4cpp
+CLIBS = -llog4cpp -lboost_program_options
 
 JCC = javac
 
