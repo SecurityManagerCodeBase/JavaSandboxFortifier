@@ -15,6 +15,9 @@
 #include <log4cpp/PropertyConfigurator.hh>
 #include <boost/program_options.hpp>
 
+#if defined(_WIN32) || defined(_WIN64)
+  #define strcasecmp _stricmp
+#endif
 
 void JNICALL VMInit(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread);
 bool GetOptions();
