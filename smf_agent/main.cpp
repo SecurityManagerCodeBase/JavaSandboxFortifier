@@ -81,12 +81,12 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	check_jvmti_error(jvmti, error, "Unable to get necessary JVMTI capabilities.");
 
 	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_MODIFICATION, NULL);
-    check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_MODIFICATION.");
+	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_MODIFICATION.");
 
 	// Enable VMInit event so that we know when the JVM is initialized and we 
 	// can finish the rest of the setup
 	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
-    check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_VM_INIT.");
+	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_VM_INIT.");
 
 	callbacks.VMInit = &VMInit;
 
