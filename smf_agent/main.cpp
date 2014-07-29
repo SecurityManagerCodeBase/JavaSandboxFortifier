@@ -155,11 +155,11 @@ bool GetOptions() {
 
 void log_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 {
-    char* errnum_str = NULL;
+	char* errnum_str = NULL;
 
-    jvmti->GetErrorName(errnum, &errnum_str);
+	jvmti->GetErrorName(errnum, &errnum_str);
 
-    logger->error("JVMTI: %d(%s): %s\n", errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
+	logger->error("JVMTI: %d(%s): %s\n", errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
 		str == NULL ? "" : str);
 
 	jvmti->Deallocate((unsigned char*)errnum_str);
@@ -167,8 +167,8 @@ void log_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 
 void check_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 {
-    if (errnum != JVMTI_ERROR_NONE)
-        log_jvmti_error(jvmti, errnum, str);
+	if (errnum != JVMTI_ERROR_NONE)
+		log_jvmti_error(jvmti, errnum, str);
 }
 
 /**
