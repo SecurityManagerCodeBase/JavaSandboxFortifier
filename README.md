@@ -30,4 +30,4 @@ cl main.cpp /EHsc /GS /DYNAMICBASE /I "%JAVA_HOME%\include" /I "%JAVA_HOME%\incl
 
 Always Running SecurityManagerFortifier
 --------------------------------
-To ensure the agent is run with every Java application on a particular system, set the JAVA_TOOL_OPTIONS (http://docs.oracle.com/javase/6/docs/platform/jvmti/jvmti.html#tooloptions) environment variable to point to the agent (e.g. C:\libsmf.dll). 
+To ensure the agent is run with every Java application on a particular system, set the JAVA_TOOL_OPTIONS (http://docs.oracle.com/javase/6/docs/platform/jvmti/jvmti.html#tooloptions) environment variable to set the -agentpath switch to point to the agent (e.g. JAVA_TOOL_OPTIONS=-agentpath:C:\libsmf.dll). 
