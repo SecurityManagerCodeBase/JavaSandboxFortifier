@@ -297,9 +297,7 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 			logger->warn("The SecurityManager is being disabled!!!\n");
 		} else if (opt.mode == ENFORCE) {
 			logger->fatal("The SecurityManager is being disabled. Terminating the running application...");
-			jni_env->GetJavaVM(&jvm);
-			// TODO: Why is this core dumping? Is there a better way? Does it work on Windows?
-			jvm->DestroyJavaVM();
+			exit(-1);
 		}
 	} else {
 		//jclass new_manager = jni_env->GetObjectClass(new_value.l);
