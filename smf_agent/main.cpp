@@ -38,6 +38,7 @@ struct options {
 options opt;
 
 log4cpp::Category* logger = NULL;
+char* SMF_HOME = NULL;
 
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
 	jvmtiEnv* jvmti = NULL;
@@ -48,13 +49,33 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	memset(&capabilities, 0, sizeof(capabilities));
 	memset(&callbacks, 0, sizeof(callbacks));
 
+	// Get the SMF_HOME environment variable
+	SMF_HOME = getenv("SMF_HOME");
+
+	// Build path to log properties
+	std::string logProperties;
+	if (SMF_HOME != NULL) {
+		logProperties += SMF_HOME;
+	} else {
+		printf("The environment variable SMF_HOME is not set. Attempting to use . as SMF_HOME.\n");
+		logProperties += ".";
+	}
+
+	logProperties += "/log4cpp.properties";
+
+	std::ifstream propertiesFile(logProperties.c_str());
+	if (!propertiesFile) {
+		printf("The log properties file (%s) does not exist. Terminating...\n", logProperties.c_str());
+		return -1;
+	}
+	propertiesFile.close();
+
 	// Start the logger
-	// TODO: Need to make this easier to find without knowing cwd (use SMF_HOME env var?)
-	log4cpp::PropertyConfigurator::configure("smf_agent/log4cpp.properties");
+	log4cpp::PropertyConfigurator::configure(logProperties);
 	logger = &log4cpp::Category::getRoot();
 
 	if (logger == NULL) {
-		printf("Failed to get logger. Terminating...");
+		printf("Failed to get logger. Terminating...\n");
 		return -1;
 	}
 
@@ -128,10 +149,26 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
  * @retval	true if all of the options in the properties are valid, false and a fatal log message otherwise
  */
 bool GetOptions() {
-	// TODO: Need to make this easier to find without knowing cwd (use SMF_HOME env var?)
 	std::string mode;
+
+	// Build path to smf properties
+	std::string smfProperties;
+	if (SMF_HOME != NULL) {
+		smfProperties += SMF_HOME;
+	} else {
+		smfProperties += ".";
+	}
+
+	smfProperties += "/smf.properties";
+
+	std::ifstream propertiesFile(smfProperties.c_str());
+	if (!propertiesFile) {
+		logger->fatal("The SMF properties file (%s) does not exist. Terminating...\n", smfProperties.c_str());
+		return false;
+	}
+	propertiesFile.close();
 	
-	std::ifstream settings_file("smf_agent/smf.properties");
+	std::ifstream settings_file(smfProperties.c_str());
 	boost::program_options::options_description desc("Options");
 	desc.add_options()
 		("mode", boost::program_options::value<std::string>(&mode), "mode");
@@ -263,7 +300,6 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	char* method_name = NULL;
 	jclass caller_class = NULL;
 	char* source_file_name = NULL;
-	JavaVM* jvm;
 
 	// Get caller (we have to do this because we are in setSecurityManager when
 	// this method is called);
@@ -291,10 +327,12 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 
 	error = jvmti->GetSourceFileName(caller_class, &source_file_name);
 
-	// If new_value is full a null SecurityManager raise a red flag
+	logger->info("SecurityManager Changed: %s, %s, %d", source_file_name, method_name, line_number);
+
+	// If new_value is a null SecurityManager raise a red flag
 	if ((long)new_value.j == 0) {
 		if (opt.mode == MONITOR) {
-			logger->warn("The SecurityManager is being disabled!!!\n");
+			logger->warn("The SecurityManager is being disabled.\n");
 		} else if (opt.mode == ENFORCE) {
 			logger->fatal("The SecurityManager is being disabled. Terminating the running application...");
 			exit(-1);
@@ -303,8 +341,6 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 		//jclass new_manager = jni_env->GetObjectClass(new_value.l);
 		// TODO: This is where we may do something with the new manager in the plugin
 	}
-
-	logger->warn("SecurityManager Changed:\n%s, %s, %d\n\n", source_file_name, method_name, line_number);
 
 	jvmti->Deallocate((unsigned char*)line_table);
 	jvmti->Deallocate((unsigned char*)method_name);
