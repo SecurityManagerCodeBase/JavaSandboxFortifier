@@ -41,7 +41,7 @@ options opt;
 
 log4cpp::Category* logger = NULL;
 char* SMF_HOME = NULL;
-long lastSecurityManagerReference = 0;
+jobject lastSecurityManagerRef = NULL;
 
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
 	jvmtiEnv* jvmti = NULL;
@@ -316,8 +316,11 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	// Store the current reference to the SecurityManager. We want to store this
 	// so that when System.security is read we can compare the value being read from
 	// the last value we saw being written to it.
-	lastSecurityManagerReference = (long)new_value.j;
-
+	if (lastSecurityManagerRef != NULL)
+		jni_env->DeleteGlobalRef(lastSecurityManagerRef);
+	
+	lastSecurityManagerRef = jni_env->NewGlobalRef(new_value.l);
+	
 	// Get caller (we have to do this because we are in setSecurityManager when
 	// this method is called);
 	error = jvmti->GetStackTrace(thread, 2, 1, &caller_frame, &frame_count);
@@ -373,17 +376,21 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 	// so that we see the current value of the field.
 	static bool ourRead = false;
 
-	if (ourRead) return;
+	// Nothing to do if last SM was null because FieldModification will take care of it
+	// if it was malicious
+	if (ourRead || lastSecurityManagerRef == NULL) return;
 
 	// FieldAccess is only set for the security field of the System class. If
 	// the current value of System.security doesn't match the last value we saw
 	// written to System.security we have detected a type confusion attack on
 	// the SecurityManager.
 	ourRead = true;
-	long currentSecurityManagerReference = (long)jni_env->GetStaticLongField(field_klass, field);
+	jobject currentSecurityManagerRef = jni_env->GetStaticObjectField(field_klass, field);
 	ourRead = false;
-
-	if (currentSecurityManagerReference != lastSecurityManagerReference) {
+	
+	jboolean isSameManager = jni_env->IsSameObject(currentSecurityManagerRef, lastSecurityManagerRef);
+	
+	if (!isSameManager) {
 		logger->fatal("A type confusion attack against the SecurityManager has been detected. Terminating the running application...");
 		exit(-1);
 	}
