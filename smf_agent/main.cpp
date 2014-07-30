@@ -28,6 +28,8 @@ void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
                 char signature_type, jvalue new_value);
+void JNICALL FieldAccess(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method,
+		jlocation location, jclass field_klass, jobject object, jfieldID field);
 
 enum smf_mode_t {MONITOR, ENFORCE};
 
@@ -39,6 +41,7 @@ options opt;
 
 log4cpp::Category* logger = NULL;
 char* SMF_HOME = NULL;
+long lastSecurityManagerReference = 0;
 
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
 	jvmtiEnv* jvmti = NULL;
@@ -95,14 +98,18 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	capabilities.can_get_line_numbers = 1;
 	capabilities.can_get_source_file_name = 1;
 
-	// Enable capability to receive events for field modifications and the event itself                
+	// Enable capability to receive events for field modifications/reads and the events themselves                
 	capabilities.can_generate_field_modification_events = 1;
+	capabilities.can_generate_field_access_events = 1;
 
 	error = jvmti->AddCapabilities(&capabilities);
 	check_jvmti_error(jvmti, error, "Unable to get necessary JVMTI capabilities.");
 
 	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_MODIFICATION, NULL);
 	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_MODIFICATION.");
+
+	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_ACCESS, NULL);
+	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_ACCESS.");
 
 	// Enable VMInit event so that we know when the JVM is initialized and we 
 	// can finish the rest of the setup
@@ -111,9 +118,11 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 
 	callbacks.VMInit = &VMInit;
 
-	// Set a callback to receive events when the security field of System is set.
-	// This will let us see when the security manager is being changed.
+	// Set a callback to receive events when the security field of System is set or read.
+	// This will let us see when the security manager is being changed or when a type
+	// confusion attack may be taking place.
 	callbacks.FieldModification = &FieldModification;
+	callbacks.FieldAccess = &FieldAccess;
 
 	error = jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
 	check_jvmti_error(jvmti, error, "Unable to register callback for field modification events.");
@@ -132,7 +141,7 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 	jvmtiError error;
 
 	// Get the security field of the System class (holds the SecurityManager) and
-	// set a modification watch on it
+	// set a modification and access (read) watch on it
 	error = GetClassBySignature(jvmti, "Ljava/lang/System;", &system_class);
 	check_jvmti_error(jvmti, error, "Unable to get System class.");
 
@@ -141,6 +150,9 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 
 	error = jvmti->SetFieldModificationWatch(system_class, securityID);
 	check_jvmti_error(jvmti, error, "Unable to set a watch on modifications of security field of System class.");
+
+	error = jvmti->SetFieldAccessWatch(system_class, securityID);
+	check_jvmti_error(jvmti, error, "Unable to set a watch on reads of security field of System class.");
 }
 
 /**
@@ -301,6 +313,11 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	jclass caller_class = NULL;
 	char* source_file_name = NULL;
 
+	// Store the current reference to the SecurityManager. We want to store this
+	// so that when System.security is read we can compare the value being read from
+	// the last value we saw being written to it.
+	lastSecurityManagerReference = (long)new_value.j;
+
 	// Get caller (we have to do this because we are in setSecurityManager when
 	// this method is called);
 	error = jvmti->GetStackTrace(thread, 2, 1, &caller_frame, &frame_count);
@@ -345,4 +362,29 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	jvmti->Deallocate((unsigned char*)line_table);
 	jvmti->Deallocate((unsigned char*)method_name);
 	jvmti->Deallocate((unsigned char*)source_file_name);
+}
+
+
+void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmethodID method,
+		jlocation location, jclass field_klass, jobject object, jfieldID field) {
+
+	// We need a flag to see if the access to the field is from this method otherwise
+	// we end up with infinite recursion. We have to read the field via jni->GetStaticLongField
+	// so that we see the current value of the field.
+	static bool ourRead = false;
+
+	if (ourRead) return;
+
+	// FieldAccess is only set for the security field of the System class. If
+	// the current value of System.security doesn't match the last value we saw
+	// written to System.security we have detected a type confusion attack on
+	// the SecurityManager.
+	ourRead = true;
+	long currentSecurityManagerReference = (long)jni_env->GetStaticLongField(field_klass, field);
+	ourRead = false;
+
+	if (currentSecurityManagerReference != lastSecurityManagerReference) {
+		logger->fatal("A type confusion attack against the SecurityManager has been detected. Terminating the running application...");
+		exit(-1);
+	}
 }
