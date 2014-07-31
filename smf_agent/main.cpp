@@ -16,7 +16,11 @@
 #include <boost/program_options.hpp>
 
 #if defined(_WIN32) || defined(_WIN64)
+  #include <direct.h>
+  #define getcwd _getcwd
   #define strcasecmp _stricmp
+#else
+  #include <unistd.h>
 #endif
 
 void JNICALL VMInit(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread);
@@ -39,6 +43,9 @@ struct options {
 
 options opt;
 
+const size_t MAX_PATH = 255;
+char cwd[MAX_PATH+1];
+
 log4cpp::Category* logger = NULL;
 char* SMF_HOME = NULL;
 jobject lastSecurityManagerRef = NULL;
@@ -51,6 +58,8 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	
 	memset(&capabilities, 0, sizeof(capabilities));
 	memset(&callbacks, 0, sizeof(callbacks));
+
+	getcwd(cwd, MAX_PATH);
 
 	// Get the SMF_HOME environment variable
 	SMF_HOME = getenv("SMF_HOME");
@@ -90,7 +99,7 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	// Get JVMTI environment
 	jint env_error = jvm->GetEnv((void **)&jvmti, JVMTI_VERSION_1_0);
 	if (env_error != JNI_OK || jvmti == NULL) {
-		logger->fatal("Failed to get JVMTI environment.");
+		logger->fatal("[%s] Failed to get JVMTI environment.", cwd);
 		return env_error;
 	}
 
@@ -175,7 +184,8 @@ bool GetOptions() {
 
 	std::ifstream propertiesFile(smfProperties.c_str());
 	if (!propertiesFile) {
-		logger->fatal("The SMF properties file (%s) does not exist. Terminating...\n", smfProperties.c_str());
+		logger->fatal("[%s] The SMF properties file (%s) does not exist. Terminating...\n", cwd, 
+			smfProperties.c_str());
 		return false;
 	}
 	propertiesFile.close();
@@ -195,7 +205,7 @@ bool GetOptions() {
 	} else if (strcasecmp(mode.c_str(), "ENFORCE") == 0) {
 		opt.mode = ENFORCE;
 	} else {
-		logger->fatal("Option value unknown: %s. Terminating...");
+		logger->fatal("[%s] Option value unknown: %s. Terminating...", cwd);
 		return false;
 	}
 
@@ -208,7 +218,7 @@ void log_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 
 	jvmti->GetErrorName(errnum, &errnum_str);
 
-	logger->error("JVMTI: %d(%s): %s\n", errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
+	logger->error("[%s] JVMTI: %d(%s): %s\n", cwd, errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
 		str == NULL ? "" : str);
 
 	jvmti->Deallocate((unsigned char*)errnum_str);
@@ -347,14 +357,15 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 
 	error = jvmti->GetSourceFileName(caller_class, &source_file_name);
 
-	logger->info("SecurityManager Changed: %s, %s, %d", source_file_name, method_name, line_number);
+	logger->info("[%s] SecurityManager Changed: %s, %s, %d", cwd, source_file_name, method_name, line_number);
 
 	// If new_value is a null SecurityManager raise a red flag
 	if ((long)new_value.j == 0) {
 		if (opt.mode == MONITOR) {
-			logger->warn("The SecurityManager is being disabled.\n");
+			logger->warn("[%s] The SecurityManager is being disabled.\n", cwd);
 		} else if (opt.mode == ENFORCE) {
-			logger->fatal("The SecurityManager is being disabled. Terminating the running application...");
+			logger->fatal("[%s] The SecurityManager is being disabled. Terminating the running application...",
+				cwd);
 			exit(-1);
 		}
 	} else {
@@ -391,7 +402,8 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 	jboolean isSameManager = jni_env->IsSameObject(currentSecurityManagerRef, lastSecurityManagerRef);
 	
 	if (!isSameManager) {
-		logger->fatal("A type confusion attack against the SecurityManager has been detected. Terminating the running application...");
+		logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected. Terminating the running application...",
+			cwd);
 		exit(-1);
 	}
 }
