@@ -21,6 +21,7 @@
   #define strcasecmp _stricmp
 #else
   #include <unistd.h>
+  #define MAX_PATH 255
 #endif
 
 void JNICALL VMInit(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread);
@@ -43,7 +44,6 @@ struct options {
 
 options opt;
 
-const size_t MAX_PATH = 255;
 char cwd[MAX_PATH+1];
 
 log4cpp::Category* logger = NULL;
