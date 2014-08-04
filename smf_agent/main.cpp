@@ -29,6 +29,8 @@ bool GetOptions();
 void check_jvmti_error(jvmtiEnv *jvmti, jvmtiError errnum, const char *str);
 jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* klass);
 jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID);
+void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number);
+bool IsPermissiveSecurityManager(jobject SecurityManagerObject);
 void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
@@ -45,7 +47,6 @@ struct options {
 options opt;
 
 char cwd[MAX_PATH+1];
-
 log4cpp::Category* logger = NULL;
 char* SMF_HOME = NULL;
 jobject lastSecurityManagerRef = NULL;
@@ -218,7 +219,7 @@ void log_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 
 	jvmti->GetErrorName(errnum, &errnum_str);
 
-	logger->error("[%s] JVMTI: %d(%s): %s\n", cwd, errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
+	logger->error("[%s] JVMTI: %d(%s): %s", cwd, errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
 		str == NULL ? "" : str);
 
 	jvmti->Deallocate((unsigned char*)errnum_str);
@@ -308,33 +309,18 @@ jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfi
 	return JVMTI_ERROR_NONE;
 }
 
-void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
-                jthread thread, jmethodID method, jlocation location,
-                jclass field_klass, jobject object, jfieldID field,
-                char signature_type, jvalue new_value) {
-
+void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number) {
 	jvmtiError error;
 	jvmtiFrameInfo caller_frame;
 	jint frame_count = 0;
 	jint line_count = 0;
-	jvmtiLineNumberEntry* line_table = NULL;
-	jint line_number = 0;
-	char* method_name = NULL;
+	jvmtiLineNumberEntry* line_table = NULL;	
 	jclass caller_class = NULL;
-	char* source_file_name = NULL;
 
-	// Store the current reference to the SecurityManager. We want to store this
-	// so that when System.security is read we can compare the value being read from
-	// the last value we saw being written to it.
-	if (lastSecurityManagerRef != NULL)
-		jni_env->DeleteGlobalRef(lastSecurityManagerRef);
-	
-	lastSecurityManagerRef = jni_env->NewGlobalRef(new_value.l);
-	
 	// Get caller (we have to do this because we are in setSecurityManager when
 	// this method is called);
 	error = jvmti->GetStackTrace(thread, 2, 1, &caller_frame, &frame_count);
-	check_jvmti_error(jvmti, error, "Unable to get stack frame.");
+	check_jvmti_error(jvmti, error, "Unable to get stack frame to look up location of SecurityManager change.");
 
 	// Get caller's line number	
 	error = jvmti->GetLineNumberTable(caller_frame.method, &line_count, &line_table);	
@@ -344,20 +330,47 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 		if (line_table[i].start_location > caller_frame.location)
 			break;
 
-		line_number = line_table[i].line_number;
+		*line_number = line_table[i].line_number;
 	}
 
 	// Get caller's method name
-	error = jvmti->GetMethodName(caller_frame.method, &method_name, NULL, NULL);
-	check_jvmti_error(jvmti, error, "Unable to method name.");
+	error = jvmti->GetMethodName(caller_frame.method, method_name, NULL, NULL);
+	check_jvmti_error(jvmti, error, "Unable to get caller's method name for SecurityManager change.");
 
 	// Get the caller's class and source file name
 	error = jvmti->GetMethodDeclaringClass(caller_frame.method, &caller_class);
-	check_jvmti_error(jvmti, error, "Unable to get caller class.");
+	check_jvmti_error(jvmti, error, "Unable to get caller's class for SecurityManager change.");
 
-	error = jvmti->GetSourceFileName(caller_class, &source_file_name);
+	error = jvmti->GetSourceFileName(caller_class, source_file);
+	check_jvmti_error(jvmti, error, "Unable to get caller's source file name for SecurityManager change.");
+	
+	jvmti->Deallocate((unsigned char*)line_table);
+}
 
-	logger->info("[%s] SecurityManager Changed: %s, %s, %d", cwd, source_file_name, method_name, line_number);
+bool IsPermissiveSecurityManager(jobject SecurityManagerObject) {
+	return false;
+}
+
+void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
+                jthread thread, jmethodID method, jlocation location,
+                jclass field_klass, jobject object, jfieldID field,
+                char signature_type, jvalue new_value) {
+
+	char* source_file = NULL;	
+	char* method_name = NULL;
+	jint line_number = 0;
+
+	GetCallerInfo(jvmti, thread, &source_file, &method_name, &line_number);
+
+	// If the last SecurityManager was null and the new one is too the operation
+	// is a no-op. Log it and ignore it.
+	if (lastSecurityManagerRef == NULL && new_value.l == NULL) {
+		logger->info("[%s] The SecurityManager is being disabled, but it was already disabled: %s, %s, %d. No action will be taken.", 
+			cwd, source_file, method_name, line_number);
+		return;
+	}
+	
+	logger->info("[%s] The SecurityManager is being changed: %s, %s, %d", cwd, source_file, method_name, line_number);
 
 	// If new_value is a null SecurityManager raise a red flag
 	if ((long)new_value.j == 0) {
@@ -368,16 +381,38 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 				cwd);
 			exit(-1);
 		}
-	} else {
-		//jclass new_manager = jni_env->GetObjectClass(new_value.l);
-		// TODO: This is where we may do something with the new manager in the plugin
+
+	// If we are setting our first SecurityManager and it is overly permissive (allows
+	// the user to perform enough options that anyone subject to the SM can trivially
+	// turn it off), warn and drop to monitor mode.
+	} else if (lastSecurityManagerRef == NULL && IsPermissiveSecurityManager(new_value.l)) {
+		if (opt.mode == ENFORCE) {
+			logger->warn("[%s] SMF was configured to run in ENFORCE mode, but a permissive SecurityManager was set as the initial SecurityManager for this application. SMF cannot stop malicious applications in the presence of a permissive SecurityManager. Dropping to MONITOR mode.", 
+				cwd);
+			opt.mode = MONITOR;
+		}
+
+	// In any other case where a SecurityManager already exists, a change to the SecurityManager
+	// is considered malicious
+	} else if (lastSecurityManagerRef != NULL) {
+		if (opt.mode == ENFORCE) {
+			logger->fatal("[%s] A non-permissive SecurityManager is currently set and it is about to be malicously changed. Terminating the running application...",
+				cwd);
+			exit(-1);
+		} 
 	}
 
-	jvmti->Deallocate((unsigned char*)line_table);
-	jvmti->Deallocate((unsigned char*)method_name);
-	jvmti->Deallocate((unsigned char*)source_file_name);
-}
+	// Store the current reference to the SecurityManager. We want to store this
+	// so that when System.security is read we can compare the value being read from
+	// the last value we saw being written to it.
+	if (lastSecurityManagerRef != NULL)
+		jni_env->DeleteGlobalRef(lastSecurityManagerRef);
+	
+	lastSecurityManagerRef = jni_env->NewGlobalRef(new_value.l);
 
+	jvmti->Deallocate((unsigned char*)method_name);
+	jvmti->Deallocate((unsigned char*)source_file);
+}
 
 void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmethodID method,
 		jlocation location, jclass field_klass, jobject object, jfieldID field) {

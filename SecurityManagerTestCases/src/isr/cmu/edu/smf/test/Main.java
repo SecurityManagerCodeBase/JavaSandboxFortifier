@@ -22,7 +22,7 @@ public class Main {
 
 		thread.start();
 		
-		// Set manager to new manager
+		// Set manager to new manager that is non-permissive
 		SecurityManager blankManager = new SecurityManager();
 		System.setSecurityManager(blankManager);
 	} 
