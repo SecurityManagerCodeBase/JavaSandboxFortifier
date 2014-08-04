@@ -594,6 +594,14 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 	if (!isSameManager) {
 		logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected. Terminating the running application...",
 			cwd);
+
+		if (opt.popups_show) {
+			std::string message("The application started in ");
+			message += cwd;
+			message += " is being terminated because a malicious operation that is attempting to bypass the Java Sandbox was detected.";
+			ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
+		}
+
 		exit(-1);
 	}
 }
