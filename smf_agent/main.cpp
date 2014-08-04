@@ -30,7 +30,7 @@ void check_jvmti_error(jvmtiEnv *jvmti, jvmtiError errnum, const char *str);
 jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* klass);
 jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID);
 void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number);
-bool IsPermissiveSecurityManager(jobject SecurityManagerObject);
+bool IsPermissiveSecurityManager(JNIEnv* jni_env, jobject SecurityManagerObject);
 void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
@@ -347,7 +347,99 @@ void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** m
 	jvmti->Deallocate((unsigned char*)line_table);
 }
 
-bool IsPermissiveSecurityManager(jobject SecurityManagerObject) {
+bool IsPermissiveSecurityManager(JNIEnv* jni_env, jobject SecurityManagerObject) {
+	// Note that we do not have to explicitly check for AllPermissions because if
+	// it is set any of the other overly-permissive permissions we check for will
+	// be set.
+	jclass SecurityManager = jni_env->GetObjectClass(SecurityManagerObject);
+
+	// Check for RuntimePermission(createClassLoader)
+	jmethodID checkCreateClassLoader = jni_env->GetMethodID(SecurityManager, "checkCreateClassLoader", "()V");
+	jni_env->CallVoidMethod(SecurityManagerObject, checkCreateClassLoader);
+	jthrowable SecurityException = jni_env->ExceptionOccurred();
+	jni_env->ExceptionClear();
+
+	// We expect to get an exception otherwise the permission is allowed and the SecurityManager is permissive
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows RuntimePermission(createClassLoader)", cwd);
+		return true;
+	}
+
+	// Check for RuntimePermission(accessClassInPackage.sun)
+	jmethodID checkPackageAccess = jni_env->GetMethodID(SecurityManager, "checkPackageAccess", "(Ljava/lang/String;)V");
+	jstring sun_package = jni_env->NewStringUTF("sun");
+	jni_env->CallVoidMethod(SecurityManagerObject, checkPackageAccess, sun_package);
+	SecurityException = jni_env->ExceptionOccurred();
+	jni_env->ExceptionClear();
+
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows RuntimePermission(accessClassInPackage.sun)", cwd);
+		return true;
+	}
+
+	// Check for RuntimePermission(setSecurityManager)
+	jclass RuntimePermission = jni_env->FindClass("java/lang/RuntimePermission");
+	jmethodID runtime_constructor = jni_env->GetMethodID(RuntimePermission, "<init>", "(Ljava/lang/String;)V");
+	jstring setSecurityManager = jni_env->NewStringUTF("setSecurityManager");
+	jobject RuntimePermissionObject = jni_env->NewObject(RuntimePermission, runtime_constructor, setSecurityManager);
+	jmethodID checkPermission = jni_env->GetMethodID(SecurityManager, "checkPermission", "(Ljava/security/Permission;)V");
+	jni_env->CallVoidMethod(SecurityManagerObject, checkPermission, RuntimePermissionObject);
+	SecurityException = jni_env->ExceptionOccurred();
+	jni_env->ExceptionClear();
+
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows RuntimePermission(setSecurityManager)", cwd);
+		return true;
+	}
+
+	// Check for ReflectPermission(suppressAccessChecks)
+	jclass ReflectPermission = jni_env->FindClass("java/lang/reflect/ReflectPermission");
+	jmethodID reflect_constructor = jni_env->GetMethodID(ReflectPermission, "<init>", "(Ljava/lang/String;)V");
+	jstring suppressAccessChecks = jni_env->NewStringUTF("suppressAccessChecks");
+	jobject ReflectPermissionObject = jni_env->NewObject(ReflectPermission, reflect_constructor, suppressAccessChecks);
+	jni_env->CallVoidMethod(SecurityManagerObject, checkPermission, ReflectPermissionObject);
+	SecurityException = jni_env->ExceptionOccurred();
+	jni_env->ExceptionClear();
+
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows ReflectPermission(suppressAccessChecks)", cwd);
+		return true;
+	}
+
+	// Check for FilePermission(ALL FILES, write | execute)
+	jmethodID checkExec = jni_env->GetMethodID(SecurityManager, "checkExec", "(Ljava/lang/String;)V");
+	jstring all_files = jni_env->NewStringUTF("<<ALL FILES>>");
+	jni_env->CallVoidMethod(SecurityManagerObject, checkExec, all_files);
+	SecurityException = jni_env->ExceptionOccurred();
+	jni_env->ExceptionClear();
+
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows FilePermission(<<ALL FILES>>, exec)", cwd);
+		return true;
+	}
+	
+	jmethodID checkWrite = jni_env->GetMethodID(SecurityManager, "checkWrite", "(Ljava/lang/String;)V");
+	jni_env->CallVoidMethod(SecurityManagerObject, checkWrite, all_files);
+	SecurityException = jni_env->ExceptionOccurred();
+	jni_env->ExceptionClear();
+
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows FilePermission(<<ALL FILES>>, write)", cwd);
+		return true;
+	}
+
+	// Check for SecurityPermission(setPolicy)
+	jmethodID checkSecurityAccess = jni_env->GetMethodID(SecurityManager, "checkSecurityAccess", "(Ljava/lang/String;)V");
+	jstring setPolicy = jni_env->NewStringUTF("setPolicy");
+	jni_env->CallVoidMethod(SecurityManagerObject, checkSecurityAccess, setPolicy);
+	SecurityException = jni_env->ExceptionOccurred();
+	jni_env->ExceptionClear();
+
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows SecurityPermission(setPolicy)", cwd);
+		return true;
+	}
+		
 	return false;
 }
 
@@ -385,7 +477,7 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	// If we are setting our first SecurityManager and it is overly permissive (allows
 	// the user to perform enough options that anyone subject to the SM can trivially
 	// turn it off), warn and drop to monitor mode.
-	} else if (lastSecurityManagerRef == NULL && IsPermissiveSecurityManager(new_value.l)) {
+	} else if (lastSecurityManagerRef == NULL && IsPermissiveSecurityManager(jni_env, new_value.l)) {
 		if (opt.mode == ENFORCE) {
 			logger->warn("[%s] SMF was configured to run in ENFORCE mode, but a permissive SecurityManager was set as the initial SecurityManager for this application. SMF cannot stop malicious applications in the presence of a permissive SecurityManager. Dropping to MONITOR mode.", 
 				cwd);

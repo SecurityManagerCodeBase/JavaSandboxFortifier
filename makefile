@@ -24,7 +24,7 @@ buildagent:
 	cd ..;
 
 run:
-	java -agentpath:smf_agent/libsmf.so -classpath SecurityManagerTestCases/bin isr.cmu.edu.smf.test.Main
+	java -agentpath:smf_agent/libsmf.so -classpath SecurityManagerTestCases/bin -Djava.security.policy=test.policy isr.cmu.edu.smf.test.Main
 
 clean:
 	-rm -f smf_agent/libsmf.so
