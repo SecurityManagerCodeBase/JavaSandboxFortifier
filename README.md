@@ -42,4 +42,12 @@ SMF uses log4cpp for logging purposes, which is configured via the log.propertie
 http://log4cpp.sourceforge.net/#propfile
 http://log4cpp.sourceforge.net/api/hierarchy.html
 
-Finally, SMF itself is configured via smf.properties. This file only has one setting: mode. Mode can be set to either monitor or enforce. In monitor mode SMF will log messages about changes to the SecurityManager. In enforce mode, SMF will log changes and forcibly shutdown any application that modifes the SecurityManager in a way that is malicious.
+Finally, SMF itself is configured via smf.properties. This file has two settings: mode and popups.show: 
+
+-mode can be set to either monitor or enforce. In monitor mode SMF will log messages about changes to the SecurityManager*. In enforce mode, SMF will log changes and forcibly shutdown any application that modifies the SecurityManager in a way that is malicious. Enforce mode follows several rules:
+--If the SecurityManager was never set, setting it to NULL produces a log message, but SMF takes no further actions because this case represent a no-op.
+--If the SecurityManager is not currently set but is being set to a SecurityManager that is permissive (i.e. one that allows operations that would let even code subject the manager's security policy disable or change the manager or change the policy), SMF drops to monitor mode. If an application sets its initial manager to one that is permissive, there is nothing SMF can do to protect it in enforce mode.
+--Assuming the SecurityManager was set to one that is not permissive, any further changes to the manager result in termination of the Java application.
+-popups.show can be set to either true or false. If true, SMF will show the user a popup describing why a Java application is being terminated before it is terminated. Servers should set this option to false.
+
+*Note that SMF will only monitor changes to the SecurityManager stored in java.lang.System's security field. If manager is stored some other way, it is not an official manager and will not be utilized by JRE classes.
