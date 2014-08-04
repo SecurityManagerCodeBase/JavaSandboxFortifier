@@ -30,7 +30,7 @@ void check_jvmti_error(jvmtiEnv *jvmti, jvmtiError errnum, const char *str);
 jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* klass);
 jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID);
 void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number);
-bool IsPermissiveSecurityManager(JNIEnv* jni_env, jobject SecurityManagerObject);
+bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject SecurityManagerObject);
 void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title);
 void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
@@ -381,12 +381,24 @@ void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** m
  *
  * @retval	true of the SecurityManager is permissive, false otherwise
  */
-bool IsPermissiveSecurityManager(JNIEnv* jni_env, jobject SecurityManagerObject) {
+bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject SecurityManagerObject) {
 	// Note that we do not have to explicitly check for AllPermissions because if
 	// it is set any of the other overly-permissive permissions we check for will
 	// be set.
 	jclass SecurityManager = jni_env->GetObjectClass(SecurityManagerObject);
 
+	// If the signature of the class is Lsun/applet/AppletSecurity; we don't need 
+	// to do further checks because we are dealing with an applet. This is a workaround
+	// because this method is not getting exceptions from Java applets when ExceptionOccured
+	// is called even if the permission is definitely not there.
+	char* sm_sig = NULL;
+	jvmti->GetClassSignature(SecurityManager, &sm_sig, NULL);
+	
+	if (strcmp(sm_sig, "Lsun/applet/AppletSecurity;") == 0) {
+		logger->debug("[%s] new SecurityManager is for an applet, assuming non-permissive", cwd);
+		return false;
+	}
+	
 	// Check for RuntimePermission(createClassLoader)
 	jmethodID checkCreateClassLoader = jni_env->GetMethodID(SecurityManager, "checkCreateClassLoader", "()V");
 	jni_env->CallVoidMethod(SecurityManagerObject, checkCreateClassLoader);
@@ -532,7 +544,9 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	// If we are setting our first SecurityManager and it is overly permissive (allows
 	// the user to perform enough options that anyone subject to the SM can trivially
 	// turn it off), warn and drop to monitor mode.
-	} else if (lastSecurityManagerRef == NULL && IsPermissiveSecurityManager(jni_env, new_value.l)) {
+	} else if (lastSecurityManagerRef == NULL && 
+		IsPermissiveSecurityManager(jvmti, jni_env, new_value.l)) {
+		
 		if (opt.mode == ENFORCE) {
 			logger->warn("[%s] SMF was configured to run in ENFORCE mode, but a permissive SecurityManager was set as the initial SecurityManager for this application. SMF cannot stop malicious applications in the presence of a permissive SecurityManager. Dropping to MONITOR mode.", 
 				cwd);
