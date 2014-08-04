@@ -31,6 +31,7 @@ jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* k
 jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID);
 void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number);
 bool IsPermissiveSecurityManager(JNIEnv* jni_env, jobject SecurityManagerObject);
+void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title);
 void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
@@ -41,7 +42,8 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread, j
 enum smf_mode_t {MONITOR, ENFORCE};
 
 struct options {
-  smf_mode_t mode;
+	smf_mode_t mode;
+	bool popups_show;  
 };
 
 options opt;
@@ -172,6 +174,7 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
  */
 bool GetOptions() {
 	std::string mode;
+	std::string popups_show;
 
 	// Build path to smf properties
 	std::string smfProperties;
@@ -194,7 +197,8 @@ bool GetOptions() {
 	std::ifstream settings_file(smfProperties.c_str());
 	boost::program_options::options_description desc("Options");
 	desc.add_options()
-		("mode", boost::program_options::value<std::string>(&mode), "mode");
+		("mode", boost::program_options::value<std::string>(&mode), "mode")
+		("popups.show", boost::program_options::value<std::string>(&popups_show), "popups.show");
 	boost::program_options::variables_map vm = boost::program_options::variables_map();
 
 	boost::program_options::store(boost::program_options::parse_config_file(settings_file , desc), vm);
@@ -205,6 +209,15 @@ bool GetOptions() {
 		opt.mode = MONITOR;
 	} else if (strcasecmp(mode.c_str(), "ENFORCE") == 0) {
 		opt.mode = ENFORCE;
+	} else {
+		logger->fatal("[%s] Option value unknown: %s. Terminating...", cwd);
+		return false;
+	}
+
+	if (strcasecmp(popups_show.c_str(), "TRUE") == 0) {
+		opt.popups_show = true;
+	} else if (strcasecmp(popups_show.c_str(), "FALSE") == 0) {
+		opt.popups_show = false;
 	} else {
 		logger->fatal("[%s] Option value unknown: %s. Terminating...", cwd);
 		return false;
@@ -309,6 +322,18 @@ jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfi
 	return JVMTI_ERROR_NONE;
 }
 
+/**
+ * @brief	inspects the most recent frame for the passed in thread to determine the name and location of 
+ *		the most recent caller. This function is used to determine who called System.setSecurityManager.
+ * 
+ * @param	[in] the JVMTI environment used to access the JVMTI API
+ * @param	[in] the Java thread whose most recent frame should be inspected
+ * @param	[out] a pointer that will be set to point to the source file name for the class containing the caller
+ * @param	[out] a pointer that will be set to point to the name of the most recent caller method
+ * @param	[out] a pointer to an integer that will be set the line number in source_file where the call was made
+ *
+ * @retval	a JVMTI error code if one is returned by any of the JVMTI API calls
+ */
 void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number) {
 	jvmtiError error;
 	jvmtiFrameInfo caller_frame;
@@ -347,6 +372,15 @@ void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** m
 	jvmti->Deallocate((unsigned char*)line_table);
 }
 
+/**
+ * @brief	determines whether or not a SecurityManager is permissive by checking for permissions that would
+ *		allow any code running under the manager to disable or change the manager or the enforced policy.
+ * 
+ * @param	[in] the JNI environment used to access the JNI API
+ * @param	[in] the Java object for the SecurityManager we want to check
+ *
+ * @retval	true of the SecurityManager is permissive, false otherwise
+ */
 bool IsPermissiveSecurityManager(JNIEnv* jni_env, jobject SecurityManagerObject) {
 	// Note that we do not have to explicitly check for AllPermissions because if
 	// it is set any of the other overly-permissive permissions we check for will
@@ -443,6 +477,19 @@ bool IsPermissiveSecurityManager(JNIEnv* jni_env, jobject SecurityManagerObject)
 	return false;
 }
 
+void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title) {
+	// This method uses Java's message dialog to display messages otherwise 
+	// we'd have to complicate the build process by using a toolkit such as wxWidgets
+	// to display it in a cross-platform manner.
+	jclass JOptionPane = jni_env->FindClass("javax/swing/JOptionPane");
+	jmethodID showMessageDialog = jni_env->GetStaticMethodID(JOptionPane, "showMessageDialog", 
+		"(Ljava/awt/Component;Ljava/lang/Object;Ljava/lang/String;I)V");
+	jobject parent = NULL;
+	jstring jmessage = jni_env->NewStringUTF(message);
+	jstring jtitle = jni_env->NewStringUTF(title);
+	jni_env->CallStaticVoidMethod(JOptionPane, showMessageDialog, parent, jmessage, jtitle, 0);
+}
+
 void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
@@ -471,6 +518,14 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 		} else if (opt.mode == ENFORCE) {
 			logger->fatal("[%s] The SecurityManager is being disabled. Terminating the running application...",
 				cwd);
+
+			if (opt.popups_show) {
+				std::string message("The application started in ");
+				message += cwd;
+				message += " is being terminated because it is attempting to disable the Java Sandbox.";
+				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
+			}
+
 			exit(-1);
 		}
 
@@ -490,6 +545,14 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 		if (opt.mode == ENFORCE) {
 			logger->fatal("[%s] A non-permissive SecurityManager is currently set and it is about to be malicously changed. Terminating the running application...",
 				cwd);
+
+			if (opt.popups_show) {
+				std::string message("The application started in ");
+				message += cwd;
+				message += " is being terminated because it is attempting to perform a malicious operation against the Java Sandbox.";
+				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
+			}
+
 			exit(-1);
 		} 
 	}
