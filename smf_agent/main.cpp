@@ -392,10 +392,13 @@ bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject Secur
 	// because this method is not getting exceptions from Java applets when ExceptionOccured
 	// is called even if the permission is definitely not there.
 	char* sm_sig = NULL;
-	jvmti->GetClassSignature(SecurityManager, &sm_sig, NULL);
+	jvmtiError error = jvmti->GetClassSignature(SecurityManager, &sm_sig, NULL);
+	logger->debug("[%s] New SecurityManager signature: %s", cwd, sm_sig);
+	check_jvmti_error(jvmti, error, "Unable to get class signature for  new SecurityManager. Assuming applet...");
 	
-	if (strcmp(sm_sig, "Lsun/applet/AppletSecurity;") == 0) {
-		logger->debug("[%s] new SecurityManager is for an applet, assuming non-permissive", cwd);
+	if (error != JVMTI_ERROR_NONE || strcmp(sm_sig, "Lsun/applet/AppletSecurity;") == 0 || 
+		strcmp(sm_sig, "Lsun/plugin2/applet/AWTAppletSecurityManager;") == 0) {
+		logger->debug("[%s] New SecurityManager is for an applet, assuming non-permissive", cwd);
 		return false;
 	}
 	
