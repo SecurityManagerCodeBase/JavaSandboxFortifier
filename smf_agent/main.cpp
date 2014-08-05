@@ -31,6 +31,8 @@ jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* k
 jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID);
 void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number);
 bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject SecurityManagerObject);
+bool RunPermissionCheck(JNIEnv* jni_env, jobject sm_object, jmethodID check_method, jstring param, 
+	const char* perm_name);
 void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title);
 void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
@@ -387,44 +389,36 @@ bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject Secur
 	// be set.
 	jclass SecurityManager = jni_env->GetObjectClass(SecurityManagerObject);
 
-	// If the signature of the class is Lsun/applet/AppletSecurity; we don't need 
-	// to do further checks because we are dealing with an applet. This is a workaround
-	// because this method is not getting exceptions from Java applets when ExceptionOccured
-	// is called even if the permission is definitely not there.
+	// If the signature of the class is for an Applet or JWS SM we assume it's non-permissive. 
+	// This is a workaround because this method is not getting exceptions from Java applets 
+	// when ExceptionOccured is called even if the permission is definitely not there.
 	char* sm_sig = NULL;
 	jvmtiError error = jvmti->GetClassSignature(SecurityManager, &sm_sig, NULL);
 	logger->debug("[%s] New SecurityManager signature: %s", cwd, sm_sig);
-	check_jvmti_error(jvmti, error, "Unable to get class signature for  new SecurityManager. Assuming applet...");
+	check_jvmti_error(jvmti, error, "Unable to get class signature for  new SecurityManager." 
+		" Assuming applet or Java Web Start...");
 	
 	if (error != JVMTI_ERROR_NONE || strcmp(sm_sig, "Lsun/applet/AppletSecurity;") == 0 || 
-		strcmp(sm_sig, "Lsun/plugin2/applet/AWTAppletSecurityManager;") == 0) {
-		logger->debug("[%s] New SecurityManager is for an applet, assuming non-permissive", cwd);
+		strcmp(sm_sig, "Lsun/plugin2/applet/AWTAppletSecurityManager;") == 0 ||
+		strcmp(sm_sig, "Lcom/sun/javaws/security/JavaWebStartSecurity;") == 0) {
+		
+		logger->debug("[%s] New SecurityManager is for an applet or Java Web Start."
+			" Assuming non-permissive...", cwd);
 		return false;
 	}
 	
+	jvmti->Deallocate((unsigned char*)sm_sig);
+	
 	// Check for RuntimePermission(createClassLoader)
 	jmethodID checkCreateClassLoader = jni_env->GetMethodID(SecurityManager, "checkCreateClassLoader", "()V");
-	jni_env->CallVoidMethod(SecurityManagerObject, checkCreateClassLoader);
-	jthrowable SecurityException = jni_env->ExceptionOccurred();
-	jni_env->ExceptionClear();
-
-	// We expect to get an exception otherwise the permission is allowed and the SecurityManager is permissive
-	if (SecurityException == NULL) {
-		logger->info("[%s] The new SecurityManager is permissive: allows RuntimePermission(createClassLoader)", cwd);
-		return true;
-	}
+	if (RunPermissionCheck(jni_env, SecurityManagerObject, checkCreateClassLoader, NULL, 
+		"RuntimePermission(createClassLoader)")) return true;	
 
 	// Check for RuntimePermission(accessClassInPackage.sun)
 	jmethodID checkPackageAccess = jni_env->GetMethodID(SecurityManager, "checkPackageAccess", "(Ljava/lang/String;)V");
 	jstring sun_package = jni_env->NewStringUTF("sun");
-	jni_env->CallVoidMethod(SecurityManagerObject, checkPackageAccess, sun_package);
-	SecurityException = jni_env->ExceptionOccurred();
-	jni_env->ExceptionClear();
-
-	if (SecurityException == NULL) {
-		logger->info("[%s] The new SecurityManager is permissive: allows RuntimePermission(accessClassInPackage.sun)", cwd);
-		return true;
-	}
+	if (RunPermissionCheck(jni_env, SecurityManagerObject, checkPackageAccess, sun_package, 
+		"RuntimePermission(accessClassInPackage.sun)")) return true;
 
 	// Check for RuntimePermission(setSecurityManager)
 	jclass RuntimePermission = jni_env->FindClass("java/lang/RuntimePermission");
@@ -433,12 +427,13 @@ bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject Secur
 	jobject RuntimePermissionObject = jni_env->NewObject(RuntimePermission, runtime_constructor, setSecurityManager);
 	jmethodID checkPermission = jni_env->GetMethodID(SecurityManager, "checkPermission", "(Ljava/security/Permission;)V");
 	jni_env->CallVoidMethod(SecurityManagerObject, checkPermission, RuntimePermissionObject);
-	SecurityException = jni_env->ExceptionOccurred();
-	jni_env->ExceptionClear();
+	jthrowable SecurityException = jni_env->ExceptionOccurred();
 
 	if (SecurityException == NULL) {
 		logger->info("[%s] The new SecurityManager is permissive: allows RuntimePermission(setSecurityManager)", cwd);
 		return true;
+	} else {
+		jni_env->ExceptionClear();
 	}
 
 	// Check for ReflectPermission(suppressAccessChecks)
@@ -448,47 +443,64 @@ bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject Secur
 	jobject ReflectPermissionObject = jni_env->NewObject(ReflectPermission, reflect_constructor, suppressAccessChecks);
 	jni_env->CallVoidMethod(SecurityManagerObject, checkPermission, ReflectPermissionObject);
 	SecurityException = jni_env->ExceptionOccurred();
-	jni_env->ExceptionClear();
 
 	if (SecurityException == NULL) {
 		logger->info("[%s] The new SecurityManager is permissive: allows ReflectPermission(suppressAccessChecks)", cwd);
 		return true;
+	} else {
+		jni_env->ExceptionClear();
 	}
 
 	// Check for FilePermission(ALL FILES, write | execute)
 	jmethodID checkExec = jni_env->GetMethodID(SecurityManager, "checkExec", "(Ljava/lang/String;)V");
 	jstring all_files = jni_env->NewStringUTF("<<ALL FILES>>");
-	jni_env->CallVoidMethod(SecurityManagerObject, checkExec, all_files);
-	SecurityException = jni_env->ExceptionOccurred();
-	jni_env->ExceptionClear();
-
-	if (SecurityException == NULL) {
-		logger->info("[%s] The new SecurityManager is permissive: allows FilePermission(<<ALL FILES>>, exec)", cwd);
-		return true;
-	}
+	if (RunPermissionCheck(jni_env, SecurityManagerObject, checkExec, all_files, 
+		"FilePermission(<<ALL FILES>>, exec)")) return true;
 	
 	jmethodID checkWrite = jni_env->GetMethodID(SecurityManager, "checkWrite", "(Ljava/lang/String;)V");
-	jni_env->CallVoidMethod(SecurityManagerObject, checkWrite, all_files);
-	SecurityException = jni_env->ExceptionOccurred();
-	jni_env->ExceptionClear();
-
-	if (SecurityException == NULL) {
-		logger->info("[%s] The new SecurityManager is permissive: allows FilePermission(<<ALL FILES>>, write)", cwd);
-		return true;
-	}
+	if (RunPermissionCheck(jni_env, SecurityManagerObject, checkWrite, all_files, 
+		"FilePermission(<<ALL FILES>>, write)")) return true;
 
 	// Check for SecurityPermission(setPolicy)
-	jmethodID checkSecurityAccess = jni_env->GetMethodID(SecurityManager, "checkSecurityAccess", "(Ljava/lang/String;)V");
+	jmethodID checkSecurityAccess = jni_env->GetMethodID(SecurityManager, "checkSecurityAccess", 
+		"(Ljava/lang/String;)V");
 	jstring setPolicy = jni_env->NewStringUTF("setPolicy");
-	jni_env->CallVoidMethod(SecurityManagerObject, checkSecurityAccess, setPolicy);
-	SecurityException = jni_env->ExceptionOccurred();
-	jni_env->ExceptionClear();
-
-	if (SecurityException == NULL) {
-		logger->info("[%s] The new SecurityManager is permissive: allows SecurityPermission(setPolicy)", cwd);
-		return true;
-	}
+	if (RunPermissionCheck(jni_env, SecurityManagerObject, checkSecurityAccess, setPolicy, 
+		"SecurityPermission(setPolicy)")) return true;
 		
+	return false;
+}
+
+/**
+ * @brief	runs a method on a specific SecurityManager object to check if a permission 
+ *			is allowed.
+ * 
+ * @param	[in] the JNI environment used to access the JNI API
+ * @param	[in] the Java object for the SecurityManager we want query
+ * @param	[in] the check method (e.g. checkPermission) we want to call
+ * @param	[in] the parameter to the check method (ignored if NULL)
+ * @param	[in] a pretty printed version of the permission name to print to the log
+ *
+ * @retval	true of the permission is allowed, false otherwise
+ */
+bool RunPermissionCheck(JNIEnv* jni_env, jobject sm_object, jmethodID check_method, jstring param, 
+	const char* perm_name) {
+	
+	if (param == NULL) {
+		jni_env->CallVoidMethod(sm_object, check_method);
+	} else {
+		jni_env->CallVoidMethod(sm_object, check_method, param);
+	}
+	
+	jthrowable SecurityException = jni_env->ExceptionOccurred();
+	
+	if (SecurityException == NULL) {
+		logger->info("[%s] The new SecurityManager is permissive: allows %s", cwd, perm_name);
+		return true;
+	} else {
+		jni_env->ExceptionClear();
+	}
+	
 	return false;
 }
 
@@ -519,7 +531,8 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	// If the last SecurityManager was null and the new one is too the operation
 	// is a no-op. Log it and ignore it.
 	if (lastSecurityManagerRef == NULL && new_value.l == NULL) {
-		logger->info("[%s] The SecurityManager is being disabled, but it was already disabled: %s, %s, %d. No action will be taken.", 
+		logger->info("[%s] The SecurityManager is being disabled, but it was already disabled: %s, %s, %d."
+			" No action will be taken.", 
 			cwd, source_file, method_name, line_number);
 		return;
 	}
@@ -560,7 +573,8 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	// is considered malicious
 	} else if (lastSecurityManagerRef != NULL) {
 		if (opt.mode == ENFORCE) {
-			logger->fatal("[%s] A non-permissive SecurityManager is currently set and it is about to be malicously changed. Terminating the running application...",
+			logger->fatal("[%s] A non-permissive SecurityManager is currently set and it is about to be malicously changed." 
+				" Terminating the running application...",
 				cwd);
 
 			if (opt.popups_show) {
@@ -609,7 +623,8 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 	jboolean isSameManager = jni_env->IsSameObject(currentSecurityManagerRef, lastSecurityManagerRef);
 	
 	if (!isSameManager) {
-		logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected. Terminating the running application...",
+		logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected."
+			" Terminating the running application...",
 			cwd);
 
 		if (opt.popups_show) {
