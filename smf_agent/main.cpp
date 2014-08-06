@@ -1,3 +1,7 @@
+// Copyright (c) 2014 Carnegie Mellon University and Others
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 /** 
  * @file	main.cpp
  * @brief 	This JVMTI agent monitors applications for changes to the SecurityManager.
