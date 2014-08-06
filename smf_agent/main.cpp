@@ -563,6 +563,10 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 			logger->fatal("[%s] The SecurityManager is being disabled. Terminating the running application...",
 				cwd);
 
+			jvmtiEventCallbacks callbacks;
+			memset(&callbacks, 0, sizeof(callbacks));
+			jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
+
 			if (opt.popups_show) {
 				std::string message("Terminating the application started in ");
 				message += cwd;
@@ -592,6 +596,10 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 			logger->fatal("[%s] A non-permissive SecurityManager is currently set and it is about to be malicously changed." 
 				" Terminating the running application...",
 				cwd);
+
+			jvmtiEventCallbacks callbacks;
+			memset(&callbacks, 0, sizeof(callbacks));
+			jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
 
 			if (opt.popups_show) {
 				std::string message("Terminating the application started in ");
@@ -634,7 +642,6 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 	// the SecurityManager.
 	ourRead = true;
 	jobject currentSecurityManagerRef = jni_env->GetStaticObjectField(field_klass, field);
-	ourRead = false;
 	
 	jboolean isSameManager = jni_env->IsSameObject(currentSecurityManagerRef, lastSecurityManagerRef);
 	
@@ -642,6 +649,10 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 		logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected."
 			" Terminating the running application...",
 			cwd);
+
+		jvmtiEventCallbacks callbacks;
+		memset(&callbacks, 0, sizeof(callbacks));
+		jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
 
 		if (opt.popups_show) {
 			std::string message("Terminating the application started in ");
@@ -652,4 +663,6 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 
 		exit(-1);
 	}
+
+	ourRead = false;
 }
