@@ -1,9 +1,9 @@
 SecurityManagerFortifier
 ========================
 
-A JVMTI agent that monitors the System SecurityManager for changes and stops potentially malicious operations.
+SecurityManagerFortifier (SMF) is a JVMTI agent that monitors changes to the System class’s SecurityManager for a running Java application and stops potentially malicious operations.
 
-Dependencies
+Build Dependencies
 --------------------------------
 
 lib4cpp (sudo apt-get install liblog4cpp5-dev)
@@ -15,7 +15,7 @@ Building on Linux
 To build both the tests and the agent run: make
 To build just the agent run: make buildagent
 To build just the tests run: make buildtests
-To run the agent onthe test cases and see the results run: make run
+To run the agent on the test cases and see the results run: make run
 
 Building on Windows
 --------------------------------
@@ -24,19 +24,20 @@ With Visual Studio installed, open the Developer Command Prompt (Start -> All Pr
 
 Note: For a 64-bit build ensure you open the x64 version of the Developer Command Prompt
 
-Fill in the <blanks> in the following command line and run it in the smf_agent directory:
+Fill in the [blanks] in the following command line and run it in the smf_agent directory:
 
-cl main.cpp /EHsc /GS /DYNAMICBASE /I "%JAVA_HOME%\include" /I "%JAVA_HOME%\include\win32" /I <path_to_log4cpp_includes> /I <path_to_boost_folder> /link /LIBPATH:<path_to_boost_folder>\stage\lib /LIBPATH:<path_holding_log4cppLIB.lib> log4cppLIB.lib Advapi32.lib Ws2_32.lib /DLL /OUT:libsmf.dll
+cl main.cpp /EHsc /GS /DYNAMICBASE /I "%JAVA_HOME%\include" /I "%JAVA_HOME%\include\win32" /I [path_to_log4cpp_includes] /I [path_to_boost_folder] /link /LIBPATH:[path_to_boost_folder]\stage\lib /LIBPATH:[path_holding_log4cppLIB.lib] log4cppLIB.lib Advapi32.lib Ws2_32.lib /DLL /OUT:libsmf.dll
 
 Install on Windows
 --------------------------------
 
-You can quickly set the necessary environment variables to cause SMF to attach to every executed Java application by running setenv.bat in the smf_agent directory. This batch file sets the environment variables assuming SMF_HOME is the directory the batch file is located you.
+You can quickly set the necessary environment variables to cause SMF to attach to every executed Java application by running setenv.bat in the smf_agent directory. This batch file sets the SMF_HOME and JAVA_TOOL_OPTIONS environment variables by assuming SMF_HOME is the directory the batch file is located in. Note that if you run this script it will wipe out anything that is already set in JAVA_TOOL_OPTIONS. The environment variables are only set for the user that runs the batch file.
 
 You can uninstall SMF by removing these environment variables. Running unsetenv.bat performs this operation.
 
 Always Attach SecurityManagerFortifier
 --------------------------------
+
 To ensure the agent is attached to every Java application that is executed on a particular system, set the JAVA_TOOL_OPTIONS (http://docs.oracle.com/javase/6/docs/platform/jvmti/jvmti.html#tooloptions) environment variable to set the -agentpath switch to point to the agent (e.g. JAVA_TOOL_OPTIONS=-agentpath:C:\smf\libsmf.dll). 
 
 Configuring SecurityManagerFortifier
