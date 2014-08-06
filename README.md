@@ -28,9 +28,16 @@ Fill in the <blanks> in the following command line and run it in the smf_agent d
 
 cl main.cpp /EHsc /GS /DYNAMICBASE /I "%JAVA_HOME%\include" /I "%JAVA_HOME%\include\win32" /I <path_to_log4cpp_includes> /I <path_to_boost_folder> /link /LIBPATH:<path_to_boost_folder>\stage\lib /LIBPATH:<path_holding_log4cppLIB.lib> log4cppLIB.lib Advapi32.lib Ws2_32.lib /DLL /OUT:libsmf.dll
 
-Always Running SecurityManagerFortifier
+Install on Windows
 --------------------------------
-To ensure the agent is run with every Java application on a particular system, set the JAVA_TOOL_OPTIONS (http://docs.oracle.com/javase/6/docs/platform/jvmti/jvmti.html#tooloptions) environment variable to set the -agentpath switch to point to the agent (e.g. JAVA_TOOL_OPTIONS=-agentpath:C:\smf\libsmf.dll). 
+
+You can quickly set the necessary environment variables to cause SMF to attach to every executed Java application by running setenv.bat in the smf_agent directory. This batch file sets the environment variables assuming SMF_HOME is the directory the batch file is located you.
+
+You can uninstall SMF by removing these environment variables. Running unsetenv.bat performs this operation.
+
+Always Attach SecurityManagerFortifier
+--------------------------------
+To ensure the agent is attached to every Java application that is executed on a particular system, set the JAVA_TOOL_OPTIONS (http://docs.oracle.com/javase/6/docs/platform/jvmti/jvmti.html#tooloptions) environment variable to set the -agentpath switch to point to the agent (e.g. JAVA_TOOL_OPTIONS=-agentpath:C:\smf\libsmf.dll). 
 
 Configuring SecurityManagerFortifier
 --------------------------------
