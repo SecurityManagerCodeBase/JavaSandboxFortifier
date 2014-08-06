@@ -552,9 +552,9 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 				cwd);
 
 			if (opt.popups_show) {
-				std::string message("The application started in ");
+				std::string message("Terminating the application started in ");
 				message += cwd;
-				message += " is being terminated because it is attempting to disable the Java Sandbox.";
+				message += ":\nApplication attempting to disable the Java Sandbox.";
 				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
 			}
 
@@ -582,9 +582,9 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 				cwd);
 
 			if (opt.popups_show) {
-				std::string message("The application started in ");
+				std::string message("Terminating the application started in ");
 				message += cwd;
-				message += " is being terminated because it is attempting to perform a malicious operation against the Java Sandbox.";
+				message += ":\nApplication attempting to perform a malicious operation against the Java Sandbox.";
 				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
 			}
 
@@ -632,9 +632,9 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 			cwd);
 
 		if (opt.popups_show) {
-			std::string message("The application started in ");
+			std::string message("Terminating the application started in ");
 			message += cwd;
-			message += " is being terminated because a malicious operation that is attempting to bypass the Java Sandbox was detected.";
+			message += ":\nThe application is attempting to bypass the Java Sandbox.";
 			ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
 		}
 
