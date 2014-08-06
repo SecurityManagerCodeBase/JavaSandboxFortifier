@@ -154,22 +154,34 @@ JNIEXPORT void JNICALL Agent_OnUnload(JavaVM* jvm)
 }
 
 void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
-	jclass system_class;
+	jclass System;
 	jfieldID securityID; 
 	jvmtiError error;
 
-	// Get the security field of the System class (holds the SecurityManager) and
-	// set a modification and access (read) watch on it
-	error = GetClassBySignature(jvmti, "Ljava/lang/System;", &system_class);
+	// Get the security field of the System class (holds the SecurityManager)
+	error = GetClassBySignature(jvmti, "Ljava/lang/System;", &System);
 	check_jvmti_error(jvmti, error, "Unable to get System class.");
 
-	error = GetFieldIDByName(jvmti, system_class, "security", &securityID);
+	error = GetFieldIDByName(jvmti, System, "security", &securityID);
 	check_jvmti_error(jvmti, error, "Unable to get security field of the System class.");
 
-	error = jvmti->SetFieldModificationWatch(system_class, securityID);
+	// Check to see if there is already a SecurityManager set. This only happens
+	// if one is set from the command line (e.g. -Djava.security.manager)
+	jmethodID getSecurityManager = jni_env->GetStaticMethodID(System, "getSecurityManager", 
+						"()Ljava/lang/SecurityManager;");
+	jobject SecurityManager = jni_env->CallStaticObjectMethod(System, getSecurityManager);
+	
+	if (SecurityManager != NULL) {
+		lastSecurityManagerRef = SecurityManager;
+
+		logger->debug("[%s] A security manager was set on the command line.", cwd);
+	}
+
+	// Set a modification and access (read) watch on the System.security field
+	error = jvmti->SetFieldModificationWatch(System, securityID);
 	check_jvmti_error(jvmti, error, "Unable to set a watch on modifications of security field of System class.");
 
-	error = jvmti->SetFieldAccessWatch(system_class, securityID);
+	error = jvmti->SetFieldAccessWatch(System, securityID);
 	check_jvmti_error(jvmti, error, "Unable to set a watch on reads of security field of System class.");
 }
 
