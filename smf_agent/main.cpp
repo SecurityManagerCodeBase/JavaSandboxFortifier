@@ -38,6 +38,7 @@ bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject Secur
 bool RunPermissionCheck(JNIEnv* jni_env, jobject sm_object, jmethodID check_method, jstring param, 
 	const char* perm_name);
 void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title);
+void TerminateJVM(jvmtiEnv* jvmti, JNIEnv* jni_env, std::string message);
 void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
@@ -533,6 +534,18 @@ void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title) 
 	jni_env->CallStaticVoidMethod(JOptionPane, showMessageDialog, parent, jmessage, jtitle, 0);
 }
 
+void terminateJVM(jvmtiEnv* jvmti, JNIEnv* jni_env, std::string message) {
+	jvmtiEventCallbacks callbacks;
+	memset(&callbacks, 0, sizeof(callbacks));
+	jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
+
+	if (opt.popups_show) {
+		ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
+	}
+
+	exit(-1);
+}
+
 void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
@@ -563,18 +576,11 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 			logger->fatal("[%s] The SecurityManager is being disabled. Terminating the running application...",
 				cwd);
 
-			jvmtiEventCallbacks callbacks;
-			memset(&callbacks, 0, sizeof(callbacks));
-			jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
-
-			if (opt.popups_show) {
-				std::string message("Terminating the application started in ");
-				message += cwd;
-				message += ":\nApplication attempting to disable the Java Sandbox.";
-				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
-			}
-
-			exit(-1);
+			std::string popup_message("Terminating the application started in ");
+				popup_message += cwd;
+				popup_message += ":\nApplication attempting to disable the Java Sandbox.";
+				
+			terminateJVM(jvmti, jni_env, popup_message);
 		}
 
 	// If we are setting our first SecurityManager and it is overly permissive (allows
@@ -597,18 +603,11 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 				" Terminating the running application...",
 				cwd);
 
-			jvmtiEventCallbacks callbacks;
-			memset(&callbacks, 0, sizeof(callbacks));
-			jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
-
-			if (opt.popups_show) {
-				std::string message("Terminating the application started in ");
-				message += cwd;
-				message += ":\nApplication attempting to perform a malicious operation against the Java Sandbox.";
-				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
-			}
-
-			exit(-1);
+			std::string popup_message("Terminating the application started in ");
+				popup_message += cwd;
+				popup_message += ":\nApplication attempting to perform a malicious operation against the Java Sandbox.";
+				
+			terminateJVM(jvmti, jni_env, popup_message);
 		} 
 	}
 
@@ -646,22 +645,20 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 	jboolean isSameManager = jni_env->IsSameObject(currentSecurityManagerRef, lastSecurityManagerRef);
 	
 	if (!isSameManager) {
-		logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected."
-			" Terminating the running application...",
-			cwd);
+		if (opt.mode == ENFORCE) {
+			logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected."
+				" Terminating the running application...",
+				cwd);
 
-		jvmtiEventCallbacks callbacks;
-		memset(&callbacks, 0, sizeof(callbacks));
-		jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
-
-		if (opt.popups_show) {
-			std::string message("Terminating the application started in ");
-			message += cwd;
-			message += ":\nThe application is attempting to bypass the Java Sandbox.";
-			ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
+			std::string popup_message("Terminating the application started in ");
+				popup_message += cwd;
+				popup_message += ":\nThe application is attempting to bypass the Java Sandbox.";
+				
+			terminateJVM(jvmti, jni_env, popup_message);
+		} else {
+			logger->warn("[%s] A type confusion attack against the SecurityManager has been detected.",
+				cwd);
 		}
-
-		exit(-1);
 	}
 
 	ourRead = false;
