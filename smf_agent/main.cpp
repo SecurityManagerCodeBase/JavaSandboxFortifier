@@ -4,22 +4,35 @@
 
 /** 
  * @file	main.cpp
- * @brief 	This JVMTI agent monitors applications for changes to the SecurityManager.
+ * @brief 	This JVMTI agent monitors applications for Privilege Escalation and changes to the 
+ *			SecurityManager.
  *
- * The Java SecurityManager is responsible for enforcing a security policy for the thread
- * it is assigned to. The SecurityManager is stored in java.lang.System's security field.
- * This agent sets up a watch on that field and prints out the source file, function name,
- * and line number of the code that initiates any changes to it.
+ * To spot Privilege Escalation, this agent compares the ProtectionDomain for every class that is
+ * loaded by a non-bootstrap ClassLoader to the ProtectionDomains for every class in the call stack
+ * that caused the class to be loaded that also was loaded by a non-boostrap ClassLoader. If
+ * a ProtectionDomain for a caller is weaker than the ProtectionDomain of the loaded class, we
+ * have privilege escalation.
+ *
+ * The Java SecurityManager is responsible for enforcing a security policy for the execution of a
+ * Java application. The SecurityManager is stored in java.lang.System's security field.
+ * This agent sets up read/write watch on the that field. These watches are used to detect that
+ * a non-permissive SecurityManager is being nulled or changed or that a type confusion attack
+ * was used to modify the SecurityManager.
  */
 #include <jvmti.h>
-#include <string.h>
+#include <string>
 #include <iostream>
 #include <fstream>
 #include <log4cpp/Category.hh>
 #include <log4cpp/PropertyConfigurator.hh>
 #include <boost/program_options.hpp>
 
+#if defined(__linux__)
+  #include <dlfcn.h>
+#endif
+
 #if defined(_WIN32) || defined(_WIN64)
+  #include <windows.h>
   #include <direct.h>
   #define getcwd _getcwd
   #define strcasecmp _stricmp
@@ -38,12 +51,17 @@ bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject Secur
 bool RunPermissionCheck(JNIEnv* jni_env, jobject sm_object, jmethodID check_method, jstring param, 
 	const char* perm_name);
 void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title);
+void TerminateJVM(jvmtiEnv* jvmti, JNIEnv* jni_env, std::string message);
 void JNICALL FieldModification(jvmtiEnv *jvmti_env, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
                 char signature_type, jvalue new_value);
 void JNICALL FieldAccess(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread, jmethodID method,
 		jlocation location, jclass field_klass, jobject object, jfieldID field);
+jobject GetProtectionDomain(jvmtiEnv* jvmti, JNIEnv* jni_env, jclass klass);
+bool IsCallerElevatingPrivileges(JNIEnv* jni_env, const jobject loaded_pd, const jobject caller_pd);
+bool IsRestrictedAccessPackage(JNIEnv* jni_env, const char* class_sig);
+void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jclass klass);
 
 enum smf_mode_t {MONITOR, ENFORCE};
 
@@ -133,7 +151,7 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	// can finish the rest of the setup
 	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
 	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_VM_INIT.");
-
+	
 	callbacks.VMInit = &VMInit;
 
 	// Set a callback to receive events when the security field of System is set or read.
@@ -141,7 +159,10 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	// confusion attack may be taking place.
 	callbacks.FieldModification = &FieldModification;
 	callbacks.FieldAccess = &FieldAccess;
-
+	// Set a callback to receive events when a class is prepared to check for privilege
+	// escalation.
+	callbacks.ClassPrepare = &ClassPrepare;
+	
 	error = jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
 	check_jvmti_error(jvmti, error, "Unable to register callback for field modification events.");
 
@@ -183,6 +204,9 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 
 	error = jvmti->SetFieldAccessWatch(System, securityID);
 	check_jvmti_error(jvmti, error, "Unable to set a watch on reads of security field of System class.");
+	
+	// This is called once here to initialize static values
+	IsRestrictedAccessPackage(jni_env, "");
 }
 
 /**
@@ -533,6 +557,18 @@ void ShowMessageDialog(JNIEnv* jni_env, const char* message, const char* title) 
 	jni_env->CallStaticVoidMethod(JOptionPane, showMessageDialog, parent, jmessage, jtitle, 0);
 }
 
+void TerminateJVM(jvmtiEnv* jvmti, JNIEnv* jni_env, std::string message) {
+	jvmtiEventCallbacks callbacks;
+	memset(&callbacks, 0, sizeof(callbacks));
+	jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
+
+	if (opt.popups_show) {
+		ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
+	}
+
+	exit(-1);
+}
+
 void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
                 jthread thread, jmethodID method, jlocation location,
                 jclass field_klass, jobject object, jfieldID field,
@@ -563,18 +599,11 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 			logger->fatal("[%s] The SecurityManager is being disabled. Terminating the running application...",
 				cwd);
 
-			jvmtiEventCallbacks callbacks;
-			memset(&callbacks, 0, sizeof(callbacks));
-			jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
-
-			if (opt.popups_show) {
-				std::string message("Terminating the application started in ");
-				message += cwd;
-				message += ":\nApplication attempting to disable the Java Sandbox.";
-				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
-			}
-
-			exit(-1);
+			std::string popup_message("Terminating the application started in ");
+				popup_message += cwd;
+				popup_message += ":\nApplication attempting to disable the Java Sandbox.";
+				
+			TerminateJVM(jvmti, jni_env, popup_message);
 		}
 
 	// If we are setting our first SecurityManager and it is overly permissive (allows
@@ -597,19 +626,19 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 				" Terminating the running application...",
 				cwd);
 
-			jvmtiEventCallbacks callbacks;
-			memset(&callbacks, 0, sizeof(callbacks));
-			jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
-
-			if (opt.popups_show) {
-				std::string message("Terminating the application started in ");
-				message += cwd;
-				message += ":\nApplication attempting to perform a malicious operation against the Java Sandbox.";
-				ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
-			}
-
-			exit(-1);
+			std::string popup_message("Terminating the application started in ");
+				popup_message += cwd;
+				popup_message += ":\nApplication attempting to perform a malicious operation against the Java Sandbox.";
+				
+			TerminateJVM(jvmti, jni_env, popup_message);
 		} 
+		
+	// New non-permissive SecurityManager so start checking for Privilege Escalation
+	} else {
+		logger->info("[%s] A restrictive SecurityManager has been set. Turning on privilege" 
+			" escalation detection...", cwd);
+		jvmtiError error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, NULL);
+		check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_CLASS_PREPARE.");
 	}
 
 	// Store the current reference to the SecurityManager. We want to store this
@@ -646,23 +675,254 @@ void JNICALL FieldAccess(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread, jmeth
 	jboolean isSameManager = jni_env->IsSameObject(currentSecurityManagerRef, lastSecurityManagerRef);
 	
 	if (!isSameManager) {
-		logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected."
-			" Terminating the running application...",
-			cwd);
+		if (opt.mode == ENFORCE) {
+			logger->fatal("[%s] A type confusion attack against the SecurityManager has been detected."
+				" Terminating the running application...",
+				cwd);
 
-		jvmtiEventCallbacks callbacks;
-		memset(&callbacks, 0, sizeof(callbacks));
-		jvmti->SetEventCallbacks(&callbacks, (jint)sizeof(callbacks));
-
-		if (opt.popups_show) {
-			std::string message("Terminating the application started in ");
-			message += cwd;
-			message += ":\nThe application is attempting to bypass the Java Sandbox.";
-			ShowMessageDialog(jni_env, message.c_str(), "Terminating Java Application");
+			std::string popup_message("Terminating the application started in ");
+				popup_message += cwd;
+				popup_message += ":\nThe application is attempting to bypass the Java Sandbox.";
+				
+			TerminateJVM(jvmti, jni_env, popup_message);
+		} else {
+			logger->warn("[%s] A type confusion attack against the SecurityManager has been detected.",
+				cwd);
 		}
-
-		exit(-1);
 	}
 
 	ourRead = false;
+}
+
+jobject GetProtectionDomain(jvmtiEnv* jvmti, JNIEnv* jni_env, jclass klass, const char* class_sig) {
+	// We have to get the protection domain by calling the JVM's 
+	// get JVM_GetProtectionDomain as it's the only way we found to
+	// accurately get it. Calling class.getProtectionDomain (on a java.lang.Class)
+	// would throw a SecurityException do to a lack of the getProtectionDomain
+	// permission and performing the same action in a Java class of our own creation
+	// that would call getProtectionDomain via doPrivilege would always return
+	// a ProtectionDomain with AllPermissions.
+	
+	#if defined(_WIN32) || defined(_WIN64)
+		typedef jobject (*PJVM_GetProtectionDomain)(JNIEnv*, jclass);
+
+		HMODULE jvm = GetModuleHandle("jvm.dll");
+		
+		if (jvm == NULL) {
+			logger->debug("[%s] Failed to get handle to jvm.dll", cwd);
+			return NULL;
+		}
+		
+		PJVM_GetProtectionDomain JVM_GetProtectionDomain = (PJVM_GetProtectionDomain)GetProcAddress(jvm,
+							"JVM_GetProtectionDomain");
+	#elif defined(__linux__)
+		void* jvm = dlopen("libjvm.so", RTLD_LAZY);
+		
+		if (jvm == NULL) {
+			logger->debug("[%s] Failed to get the handle to libjvm.so", cwd);
+			return NULL;
+		}
+
+		jobject (*JVM_GetProtectionDomain)(JNIEnv*, jclass);
+		*(void **)(&JVM_GetProtectionDomain) = dlsym(jvm, "JVM_GetProtectionDomain");
+	#endif
+	
+	jobject ProtectionDomainObject = JVM_GetProtectionDomain(jni_env, klass);
+	
+	if (ProtectionDomainObject == NULL) {
+		logger->debug("[%s] Failed to retrieve the ProtectionDomain for %s.", cwd, class_sig);
+	} else {
+		logger->debug("[%s] Got ProtectionDomain for %s", cwd, class_sig);
+	}
+	
+	
+	return ProtectionDomainObject;
+}
+
+bool IsCallerElevatingPrivileges(JNIEnv* jni_env, const jobject loaded_pd, const jobject caller_pd) {
+	if (loaded_pd == NULL && caller_pd != NULL) {
+		logger->debug("[%s] Can't access the loaded class's ProtectionDomain but we can access the caller's."
+			" Privilege escalation.", cwd);
+		return true;
+	} else if ((loaded_pd == NULL && caller_pd == NULL) || (loaded_pd != NULL && caller_pd == NULL)) {
+		return false;
+	}
+
+	if (jni_env->IsSameObject(loaded_pd, caller_pd)) {
+		logger->debug("[%s} The loaded class and the caller have the same ProtectionDomain."
+			" No privilege escalation.",
+			cwd);
+		return false;
+	}
+	
+	// We need to check to see if every Permission in the loaded class's PermissionCollection
+	// is implied by the caller's PermissionCollection. If not, we have privilege escalation
+	// because a class (the caller) is loading a class more privileged than itself.
+	jclass ProtectionDomain = jni_env->FindClass("Ljava/security/ProtectionDomain;");
+	jmethodID implies = jni_env->GetMethodID(ProtectionDomain, "implies", "(Ljava/security/Permission;)Z");
+	
+	// If the caller does not have AllPermissions but the loaded class does
+	// we have priviledge escalation
+	jclass AllPermission = jni_env->FindClass("Ljava/security/AllPermission;");
+	jmethodID constructor = jni_env->GetMethodID(AllPermission, "<init>", "()V");
+	jobject AllPermissionObject = jni_env->NewObject(AllPermission, constructor);
+	
+	if (jni_env->CallBooleanMethod(loaded_pd, implies, AllPermissionObject) &&
+		!jni_env->CallBooleanMethod(caller_pd, implies, AllPermissionObject)) {
+
+		jmethodID ProtectionDomain_toString = jni_env->GetMethodID(ProtectionDomain, "toString", 
+												"()Ljava/lang/String;");
+		jobject LoadedPDString = jni_env->CallObjectMethod(loaded_pd, ProtectionDomain_toString);
+		const char* loaded_pd_string = jni_env->GetStringUTFChars((jstring)LoadedPDString, NULL);
+		jobject CallerPDString = jni_env->CallObjectMethod(caller_pd, ProtectionDomain_toString);
+		const char* caller_pd_string = jni_env->GetStringUTFChars((jstring)CallerPDString, NULL);								
+		logger->debug("[%s] Loaded Class's ProtectionDomain:\n%s", cwd, loaded_pd_string);
+		logger->debug("[%s] Calling Class's ProtectionDomain:\n%s", cwd, caller_pd_string);
+
+		jni_env->ReleaseStringUTFChars((jstring)LoadedPDString, loaded_pd_string);
+		jni_env->ReleaseStringUTFChars((jstring)CallerPDString, caller_pd_string);
+		
+		return true;
+	}
+	
+	return false;
+}
+
+bool IsRestrictedAccessPackage(JNIEnv* jni_env, const char* class_sig) {
+	static jobject ValueObject = NULL;
+	std::string sig(class_sig);
+	
+	if (ValueObject == NULL) {
+		jclass Security = jni_env->FindClass("Ljava/security/Security;");
+		jmethodID getProperty = jni_env->GetStaticMethodID(Security, "getProperty", 
+									"(Ljava/lang/String;)Ljava/lang/String;");
+		jstring PropertyString = jni_env->NewStringUTF("package.access");
+		ValueObject = jni_env->NewGlobalRef(
+			jni_env->CallStaticObjectMethod(Security, getProperty, PropertyString));
+		
+		if (jni_env->ExceptionOccurred() != NULL) {
+			logger->debug("[%s] Failed to get the package.access property.", cwd);
+			jni_env->ExceptionClear();
+		}
+	}
+	
+	if (ValueObject == NULL) return false;
+	
+	const char* restrictedAccessPackages = jni_env->GetStringUTFChars((jstring)ValueObject, NULL);
+
+	// Split the restricted packages list on , then prepend an L and replace . with /
+	char* token = strtok((char*)restrictedAccessPackages, ",");
+	
+	while (token != NULL) {
+		std::string package(token);
+		package = "L" + package;
+		std::replace(package.begin(), package.end(), '.', '/');
+		
+		if (sig.compare(0, package.size(), package) == 0) return true;
+		
+		token = strtok(NULL, ",");
+	}
+	
+	jni_env->ReleaseStringUTFChars((jstring)ValueObject, restrictedAccessPackages);
+	
+	return false;
+}
+ 
+void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jclass klass)
+{
+	jboolean is_interface, is_array;
+	char* class_sig = NULL;
+	jobject class_loader_object = NULL;
+	jobject KlassProtectionDomainObject = NULL;
+	jint frame_count = 0;
+	jint retrieved_frame_count = 0;
+	jvmtiError error; 
+	jobject CallerProtectionDomainObject = NULL;
+		
+	jvmti->IsInterface(klass, &is_interface);
+	jvmti->IsArrayClass(klass, &is_array);
+	if (is_interface || is_array) return;
+			
+	jvmti->GetFrameCount(thread, &frame_count);
+	jvmtiFrameInfo* frames = new jvmtiFrameInfo[frame_count];
+
+	// We only care about classes that have a ClassLoader because the rest
+	// are bootstrap classes
+	jvmti->GetClassSignature(klass, &class_sig, NULL);
+	jvmti->GetClassLoader(klass, &class_loader_object);
+	if (class_loader_object == NULL) goto exit;
+
+	logger->debug("[%s] A new class is being loaded by a non-bootstrap ClassLoader: %s", cwd, class_sig);
+	
+	// We don't worry about sun classes because the JRE protects them
+	// under most conditions where a non-permissive manager is set.
+	if (IsRestrictedAccessPackage(jni_env, class_sig)) {
+		logger->debug("[%s] Skipping comparison of ProtectionDomains for %s because the loaded class is in a"
+			" package the JRE protects.", cwd, class_sig);
+		goto exit;
+	}
+	
+	KlassProtectionDomainObject = GetProtectionDomain(jvmti, jni_env, klass, class_sig);
+	
+	// Get the protection domain for any class in the stack frame that
+	// led to this class being loaded that has a ClassLoader. If a caller
+	// has a weaker ProtectionDomain than the loaded class does, we have
+	// detected privilege escalation.
+	error = jvmti->GetStackTrace(thread, 0, frame_count, frames, &retrieved_frame_count);
+	
+	if (error == JVMTI_ERROR_NONE && retrieved_frame_count > 1) {
+		jclass method_class = NULL;
+		jobject method_class_loader = NULL;
+		char* method_class_sig = NULL;
+		
+		for (int i = 0; i < retrieved_frame_count; i++) {
+			jvmti->GetMethodDeclaringClass(frames[i].method, &method_class);
+			
+			jvmti->IsInterface(method_class, &is_interface);
+			jvmti->IsArrayClass(klass, &is_array);
+			if (is_interface || is_array) return;
+			
+			jvmti->GetClassLoader(method_class, &method_class_loader);
+			if (method_class_loader == NULL) continue;
+			
+			jvmti->GetClassSignature(method_class, &method_class_sig, NULL);
+			
+			CallerProtectionDomainObject = GetProtectionDomain(jvmti, jni_env, method_class, 
+												method_class_sig);
+			
+			logger->debug("[%s] %s is a non-bootstrap class in the stack frame that loaded %s. Comparing ProtectionDomains...", cwd, method_class_sig, class_sig);
+
+			if (KlassProtectionDomainObject == NULL) printf("WTF\n");
+			if (CallerProtectionDomainObject == NULL) printf("WWWWWW\n");
+			
+			if (IsCallerElevatingPrivileges(jni_env, KlassProtectionDomainObject, 
+				CallerProtectionDomainObject)){
+				
+				if (opt.mode == ENFORCE) {
+					logger->fatal("[%s] A privilege escalation attack has been detected. %s tried"
+						" to elevate the privileges of %s."
+						" Terminating the running application...",
+						cwd, method_class_sig, class_sig);
+						
+					std::string popup_message("Terminating the application started in ");
+						popup_message += cwd;
+						popup_message += ":\nThe application is escalating its privileges to bypass the Java Sandbox.";
+					
+					TerminateJVM(jvmti, jni_env, popup_message);
+				} else {
+					logger->warn("[%s] A privilege escalation attack has been detected. %s tried"
+						" to elevate the privileges of %s.",
+						cwd, method_class_sig, class_sig);
+				}
+			}
+			
+			jni_env->DeleteLocalRef(method_class_loader);
+			jvmti->Deallocate((unsigned char*)method_class_sig);
+		}
+	}
+	
+exit:
+	delete [] frames;
+	jni_env->DeleteLocalRef(class_loader_object);
+	jvmti->Deallocate((unsigned char*)class_sig);
 }
