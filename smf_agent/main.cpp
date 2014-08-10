@@ -389,6 +389,8 @@ void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** m
 	error = jvmti->GetStackTrace(thread, 2, 1, &caller_frame, &frame_count);
 	check_jvmti_error(jvmti, error, "Unable to get stack frame to look up location of SecurityManager change.");
 
+	if (error != JVMTI_ERROR_NONE) return;
+
 	// Get caller's line number	
 	error = jvmti->GetLineNumberTable(caller_frame.method, &line_count, &line_table);	
 	check_jvmti_error(jvmti, error, "Unable to get line number for SecurityManager change.");
