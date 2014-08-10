@@ -633,7 +633,10 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 				popup_message += ":\nApplication attempting to perform a malicious operation against the Java Sandbox.";
 				
 			TerminateJVM(jvmti, jni_env, popup_message);
-		} 
+		} else {
+			logger->warn("[%s] A non-permissive SecurityManager is currently set and it is about to be malicously changed.",
+				cwd);
+		}
 		
 	// New non-permissive SecurityManager so start checking for Privilege Escalation
 	} else {
@@ -893,9 +896,6 @@ void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jcla
 												method_class_sig);
 			
 			logger->debug("[%s] %s is a non-bootstrap class in the stack frame that loaded %s. Comparing ProtectionDomains...", cwd, method_class_sig, class_sig);
-
-			if (KlassProtectionDomainObject == NULL) printf("WTF\n");
-			if (CallerProtectionDomainObject == NULL) printf("WWWWWW\n");
 			
 			if (IsCallerElevatingPrivileges(jni_env, KlassProtectionDomainObject, 
 				CallerProtectionDomainObject)){
