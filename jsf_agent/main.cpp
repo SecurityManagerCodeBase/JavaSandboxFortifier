@@ -217,7 +217,7 @@ bool GetOptions() {
 	std::string mode;
 	std::string popups_show;
 
-	// Build path to smf properties
+	// Build path to jsf properties
 	std::string smfProperties;
 	if (SMF_HOME != NULL) {
 		smfProperties += SMF_HOME;
@@ -225,11 +225,11 @@ bool GetOptions() {
 		smfProperties += ".";
 	}
 
-	smfProperties += "/smf.properties";
+	smfProperties += "/jsf.properties";
 
 	std::ifstream propertiesFile(smfProperties.c_str());
 	if (!propertiesFile) {
-		logger->fatal("[%s] The SMF properties file (%s) does not exist. Terminating...\n", cwd, 
+		logger->fatal("[%s] The JSF properties file (%s) does not exist. Terminating...\n", cwd, 
 			smfProperties.c_str());
 		return false;
 	}
