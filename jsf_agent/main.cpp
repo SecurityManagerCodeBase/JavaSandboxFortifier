@@ -818,6 +818,7 @@ void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jcla
 	// has a weaker ProtectionDomain than the loaded class does, we have
 	// detected privilege escalation.
 	error = jvmti->GetStackTrace(thread, 0, frame_count, frames, &retrieved_frame_count);
+	check_jvmti_error(jvmti, error, "Failed to get stack frames when checking for privilege escalation.");
 	
 	if (error == JVMTI_ERROR_NONE && retrieved_frame_count > 1) {
 		jclass method_class = NULL;
@@ -835,6 +836,9 @@ void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jcla
 			if (method_class_loader == NULL) continue;
 			
 			jvmti->GetClassSignature(method_class, &method_class_sig, NULL);
+			if (IsRestrictedAccessPackage(jni_env, method_class_sig)) {
+				goto continue_loop;
+			}
 			
 			CallerProtectionDomainObject = GetProtectionDomain(jvmti, jni_env, method_class, 
 												method_class_sig);
@@ -862,6 +866,7 @@ void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jcla
 				}
 			}
 			
+continue_loop:
 			jni_env->DeleteLocalRef(method_class_loader);
 			jvmti->Deallocate((unsigned char*)method_class_sig);
 		}
