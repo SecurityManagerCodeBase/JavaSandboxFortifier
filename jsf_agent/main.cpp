@@ -85,10 +85,10 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	memset(&capabilities, 0, sizeof(capabilities));
 	memset(&callbacks, 0, sizeof(callbacks));
 
-	getcwd(cwd, MAX_PATH);
-
-	// Get the JSF_HOME environment variable
-	JSF_HOME = getenv("JSF_HOME");
+	if (getcwd(cwd, MAX_PATH)) {
+		// Get the JSF_HOME environment variable
+		JSF_HOME = getenv("JSF_HOME");
+	}
 
 	// Build path to log properties
 	std::string logProperties;
