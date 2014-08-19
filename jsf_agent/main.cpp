@@ -62,10 +62,10 @@ bool IsCallerElevatingPrivileges(JNIEnv* jni_env, const jobject loaded_pd, const
 bool IsRestrictedAccessPackage(JNIEnv* jni_env, const char* class_sig);
 void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jclass klass);
 
-enum smf_mode_t {MONITOR, ENFORCE};
+enum jsf_mode_t {MONITOR, ENFORCE};
 
 struct options {
-	smf_mode_t mode;
+	jsf_mode_t mode;
 	bool popups_show;  
 };
 
@@ -73,7 +73,7 @@ options opt;
 
 char cwd[MAX_PATH+1];
 log4cpp::Category* logger = NULL;
-char* SMF_HOME = NULL;
+char* JSF_HOME = NULL;
 jobject lastSecurityManagerRef = NULL;
 
 JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) {
@@ -87,15 +87,15 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 
 	getcwd(cwd, MAX_PATH);
 
-	// Get the SMF_HOME environment variable
-	SMF_HOME = getenv("SMF_HOME");
+	// Get the JSF_HOME environment variable
+	JSF_HOME = getenv("JSF_HOME");
 
 	// Build path to log properties
 	std::string logProperties;
-	if (SMF_HOME != NULL) {
-		logProperties += SMF_HOME;
+	if (JSF_HOME != NULL) {
+		logProperties += JSF_HOME;
 	} else {
-		printf("The environment variable SMF_HOME is not set. Attempting to use . as SMF_HOME.\n");
+		printf("The environment variable JSF_HOME is not set. Attempting to use . as JSF_HOME.\n");
 		logProperties += ".";
 	}
 
@@ -209,7 +209,7 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 }
 
 /**
- * @brief	reads the smf properties file and populates the global opt struct with the correct values
+ * @brief	reads the jsf properties file and populates the global opt struct with the correct values
  *
  * @retval	true if all of the options in the properties are valid, false and a fatal log message otherwise
  */
@@ -218,24 +218,24 @@ bool GetOptions() {
 	std::string popups_show;
 
 	// Build path to jsf properties
-	std::string smfProperties;
-	if (SMF_HOME != NULL) {
-		smfProperties += SMF_HOME;
+	std::string jsfProperties;
+	if (JSF_HOME != NULL) {
+		jsfProperties += JSF_HOME;
 	} else {
-		smfProperties += ".";
+		jsfProperties += ".";
 	}
 
-	smfProperties += "/jsf.properties";
+	jsfProperties += "/jsf.properties";
 
-	std::ifstream propertiesFile(smfProperties.c_str());
+	std::ifstream propertiesFile(jsfProperties.c_str());
 	if (!propertiesFile) {
 		logger->fatal("[%s] The JSF properties file (%s) does not exist. Terminating...\n", cwd, 
-			smfProperties.c_str());
+			jsfProperties.c_str());
 		return false;
 	}
 	propertiesFile.close();
 	
-	std::ifstream settings_file(smfProperties.c_str());
+	std::ifstream settings_file(jsfProperties.c_str());
 	boost::program_options::options_description desc("Options");
 	desc.add_options()
 		("mode", boost::program_options::value<std::string>(&mode), "mode")
@@ -559,7 +559,7 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 		IsPermissiveSecurityManager(jvmti, jni_env, new_value.l)) {
 		
 		if (opt.mode == ENFORCE) {
-			logger->warn("[%s] SMF was configured to run in ENFORCE mode, but a permissive SecurityManager was set as the initial SecurityManager for this application. SMF cannot stop malicious applications in the presence of a permissive SecurityManager. Dropping to MONITOR mode.", 
+			logger->warn("[%s] JSF was configured to run in ENFORCE mode, but a permissive SecurityManager was set as the initial SecurityManager for this application. JSF cannot stop malicious applications in the presence of a permissive SecurityManager. Dropping to MONITOR mode.", 
 				cwd);
 			opt.mode = MONITOR;
 		}
