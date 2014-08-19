@@ -44,8 +44,7 @@
 void JNICALL VMInit(jvmtiEnv *jvmti_env, JNIEnv* jni_env, jthread thread);
 bool GetOptions();
 void check_jvmti_error(jvmtiEnv *jvmti, jvmtiError errnum, const char *str);
-jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* klass);
-jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID);
+void check_jni_error(jvmtiEnv* jvmti, JNIEnv* jni_env, void* retval, const char* str);
 void GetCallerInfo(jvmtiEnv* jvmti, jthread thread, char** source_file, char** method_name, jint* line_number);
 bool IsPermissiveSecurityManager(jvmtiEnv* jvmti, JNIEnv* jni_env, jobject SecurityManagerObject);
 bool RunPermissionCheck(JNIEnv* jni_env, jobject sm_object, jmethodID check_method, jstring param, 
@@ -180,11 +179,11 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 	jvmtiError error;
 
 	// Get the security field of the System class (holds the SecurityManager)
-	error = GetClassBySignature(jvmti, "Ljava/lang/System;", &System);
-	check_jvmti_error(jvmti, error, "Unable to get System class.");
+	System = jni_env->FindClass("Ljava/lang/System;");
+	check_jni_error(jvmti, jni_env, System, "Unable to get System class.");
 
-	error = GetFieldIDByName(jvmti, System, "security", &securityID);
-	check_jvmti_error(jvmti, error, "Unable to get security field of the System class.");
+	securityID = jni_env->GetStaticFieldID(System, "security", "Ljava/lang/SecurityManager;");
+	check_jni_error(jvmti, jni_env, securityID, "Unable to get security field of the System class.");
 
 	// Check to see if there is already a SecurityManager set. This only happens
 	// if one is set from the command line (e.g. -Djava.security.manager)
@@ -268,100 +267,45 @@ bool GetOptions() {
 	return true;
 }
 
-void log_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
-{
-	char* errnum_str = NULL;
-
-	jvmti->GetErrorName(errnum, &errnum_str);
-
-	logger->error("[%s] JVMTI: %d(%s): %s", cwd, errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
-		str == NULL ? "" : str);
-
-	jvmti->Deallocate((unsigned char*)errnum_str);
-}
-
 void check_jvmti_error(jvmtiEnv* jvmti, jvmtiError errnum, const char* str)
 {
 	if (errnum != JVMTI_ERROR_NONE)
-		log_jvmti_error(jvmti, errnum, str);
+	{
+		char* errnum_str = NULL;
+
+		jvmti->GetErrorName(errnum, &errnum_str);
+
+		logger->error("[%s] JVMTI: %d(%s): %s", cwd, errnum, errnum_str == NULL ? "Unknown" : errnum_str, 
+			str == NULL ? "" : str);
+
+		jvmti->Deallocate((unsigned char*)errnum_str);
+	}
 }
 
-/**
- * @brief	looks up and returns the reference for a class based on a user specified Java type signature
- * 
- * @param	[in] the JVMTI environment used to access the JVMTI API
- * @param	[in] the Java type signature for the class we'd like to retrieve a reference to
- * @param	[out] a pointer that will be set to reference the class whose signature was specified
- *
- * @retval	a JVMTI error code if one is returned by any of the JVMTI API calls
- */
-jvmtiError GetClassBySignature(jvmtiEnv* jvmti, const char* signature, jclass* klass) {
-	jint class_count = 0;
-	jclass* classes = NULL;
-	jvmtiError error;
-
-	error = jvmti->GetLoadedClasses(&class_count, &classes);
-	if (error != JVMTI_ERROR_NONE)
-		return error;
-
-
-	for (int i = 0; i < class_count; i++) {
-		char* class_signature = NULL;
-
-		error = jvmti->GetClassSignature(classes[i], &class_signature, NULL);
-		if (error != JVMTI_ERROR_NONE)
-			return error;
-
-		if (strcmp(class_signature, signature) == 0) {
-			*klass = classes[i];
-			break;
+void check_jni_error(jvmtiEnv* jvmti, JNIEnv* jni_env, void* retval, const char* str) {
+	// This method is to be used for JNI method calls that return NULL
+	// when an error occurs.
+	if (retval == NULL) {
+		jthrowable exception = jni_env->ExceptionOccurred();
+		
+		if (exception == NULL) {
+			logger->error("JNI Error: %s", str);
+		} else {
+			char* exception_sig = NULL;
+			
+			jclass exception_class = jni_env->GetObjectClass(exception);
+			jvmtiError error = jvmti->GetClassSignature(exception_class, &exception_sig, NULL);
+			check_jvmti_error(jvmti, error, "A JNI error occurred and an exception was thrown, but failed "
+				"to get the exception's class signature.");
+				
+			if (error == JVMTI_ERROR_NONE) {
+				logger->error("JNI Error: %s %s", exception_sig, str);
+				jvmti->Deallocate((unsigned char*)exception_sig);
+			} else {
+				logger->error("JNI Error: %s", str);
+			}
 		}
-
-		jvmti->Deallocate((unsigned char*)class_signature);
 	}
-
-	jvmti->Deallocate((unsigned char*)classes);
-
-	return JVMTI_ERROR_NONE;
-}
-
-/**
- * @brief	looks up and returns the ID for a field in a class based on a user specified field name and class
- * 
- * @param	[in] the JVMTI environment used to access the JVMTI API
- * @param	[in] the Java class we want to retrieve a field ID from
- * @param	[in] the name of the field whose ID we want to retrieve
- * @param	[out] a pointer to a jfieldID that will be set to the named field's ID
- *
- * @retval	a JVMTI error code if one is returned by any of the JVMTI API calls
- */
-jvmtiError GetFieldIDByName(jvmtiEnv* jvmti, jclass klass, const char* name, jfieldID* fieldID) {
-	jint field_count = 0;
-	jfieldID* fields = NULL;
-	jvmtiError error;
-
-	error = jvmti->GetClassFields(klass, &field_count, &fields);
-	if (error != JVMTI_ERROR_NONE)
-		return error;
-
-	for (int i = 0; i < field_count; i++) {
-		char* field_name = NULL;
-
-		error = jvmti->GetFieldName(klass, fields[i], &field_name, NULL, NULL);
-		if (error != JVMTI_ERROR_NONE)
-			return error;
-
-		if (strcmp(field_name, name) == 0) {
-			*fieldID = fields[i];
-			break;
-		}
-
-		jvmti->Deallocate((unsigned char*)field_name);
-	}
-
-	jvmti->Deallocate((unsigned char*)fields);
-
-	return JVMTI_ERROR_NONE;
 }
 
 /**
