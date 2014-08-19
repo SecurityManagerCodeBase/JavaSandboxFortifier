@@ -143,9 +143,6 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_MODIFICATION, NULL);
 	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_MODIFICATION.");
 
-	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_ACCESS, NULL);
-	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_ACCESS.");
-
 	// Enable VMInit event so that we know when the JVM is initialized and we 
 	// can finish the rest of the setup
 	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
@@ -585,9 +582,12 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 	// New non-permissive SecurityManager so start checking for Privilege Escalation
 	} else {
 		logger->info("[%s] A restrictive SecurityManager has been set. Turning on privilege" 
-			" escalation detection...", cwd);
+			" escalation and type confusion detection...", cwd);
 		jvmtiError error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, NULL);
 		check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_CLASS_PREPARE.");
+		
+		error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_ACCESS, NULL);
+		check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_ACCESS.");
 	}
 
 	// Store the current reference to the SecurityManager. We want to store this
