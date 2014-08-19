@@ -19,14 +19,14 @@ buildtests:
 	cd ..;
 
 buildagent:
-	cd smf_agent; \
-	$(CC) -I$(INCLUDES) $(CFLAGS) -o libsmf.so main.cpp $(CLIBS); \
+	cd jsf_agent; \
+	$(CC) -I$(INCLUDES) $(CFLAGS) -o libjsf.so main.cpp $(CLIBS); \
 	cd ..;
 
 run:
-	java -agentpath:smf_agent/libsmf.so -classpath SecurityManagerTestCases/bin -Djava.security.policy=test.policy isr.cmu.edu.smf.test.Main
+	java -agentpath:jsf_agent/libjsf.so -classpath SecurityManagerTestCases/bin -Djava.security.policy=test.policy isr.cmu.edu.smf.test.Main
 
 clean:
-	-rm -f smf_agent/libsmf.so
+	-rm -f jsf_agent/libjsf.so
 	-rm -rf SecurityManagerTestCases/bin
 
