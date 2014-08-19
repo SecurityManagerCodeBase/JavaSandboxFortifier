@@ -1,7 +1,7 @@
 # This makefile assumes you have JAVA_HOME set to your JDK directory
 INCLUDES=$(JAVA_HOME)/include
 CC = g++
-CFLAGS = -Wall -pedantic -fPIC -shared
+CFLAGS = -Wall -pedantic -fPIC -shared -O3
 CLIBS = -llog4cpp -lboost_program_options
 
 JCC = javac
