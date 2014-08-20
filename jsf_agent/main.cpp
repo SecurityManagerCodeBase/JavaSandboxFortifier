@@ -831,12 +831,12 @@ bool IsSecurityManagerSet(jvmtiEnv* jvmti, JNIEnv* jni_env) {
 			getSecurityManager = jni_env->GetStaticMethodID(System, "getSecurityManager", 
 				"()Ljava/lang/SecurityManager;");
 			check_jni_error(jvmti, jni_env, getSecurityManager, "Unable to ID for getSecurityManager.");
-		} else {
-			jobject SecurityManagerObject = jni_env->CallStaticObjectMethod(System, getSecurityManager);
-			
-			if (SecurityManagerObject == NULL) return false;
-			else return true;
 		}
+		
+		jobject SecurityManagerObject = jni_env->CallStaticObjectMethod(System, getSecurityManager);
+			
+		if (SecurityManagerObject == NULL) return false;
+		else return true;
 	}
 }
 
