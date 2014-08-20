@@ -89,6 +89,8 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	if (getcwd(cwd, MAX_PATH)) {
 		// Get the JSF_HOME environment variable
 		JSF_HOME = getenv("JSF_HOME");
+	} else {
+		printf("Unable to get the CWD.\n");
 	}
 
 	// Build path to log properties
