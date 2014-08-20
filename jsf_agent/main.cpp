@@ -689,6 +689,20 @@ jobject GetProtectionDomain(jvmtiEnv* jvmti, JNIEnv* jni_env, jclass klass, cons
 		
 		PJVM_GetProtectionDomain JVM_GetProtectionDomain = (PJVM_GetProtectionDomain)GetProcAddress(jvm,
 							"JVM_GetProtectionDomain");
+			
+		jobject ProtectionDomainObject = NULL;
+			
+		// Sometimes the function name is manged in 32-bit versions of the JRE
+		if (JVM_GetProtectionDomain == NULL) {
+			logger->debug("[%s] Name of JVM_GetProtectionDomain is mangled in jvm.dll", cwd);
+			
+			typedef jobject (__stdcall *_stdcall_PJVM_GetProtectionDomain)(JNIEnv*, jclass);
+			_stdcall_PJVM_GetProtectionDomain _stdcall_JVM_GetProtectionDomain = 
+				(_stdcall_PJVM_GetProtectionDomain)GetProcAddress(jvm, "_JVM_GetProtectionDomain@8");
+			ProtectionDomainObject = _stdcall_JVM_GetProtectionDomain(jni_env, klass);
+		} else {
+			ProtectionDomainObject = JVM_GetProtectionDomain(jni_env, klass);
+		}
 	#elif defined(__linux__)
 		void* jvm = dlopen("libjvm.so", RTLD_LAZY);
 		
@@ -699,9 +713,9 @@ jobject GetProtectionDomain(jvmtiEnv* jvmti, JNIEnv* jni_env, jclass klass, cons
 
 		jobject (*JVM_GetProtectionDomain)(JNIEnv*, jclass);
 		*(void **)(&JVM_GetProtectionDomain) = dlsym(jvm, "JVM_GetProtectionDomain");
+		
+		jobject ProtectionDomainObject = JVM_GetProtectionDomain(jni_env, klass);
 	#endif
-	
-	jobject ProtectionDomainObject = JVM_GetProtectionDomain(jni_env, klass);
 	
 	if (ProtectionDomainObject == NULL) {
 		logger->debug("[%s] Failed to retrieve the ProtectionDomain for %s.", cwd, class_sig);
