@@ -723,7 +723,6 @@ jobject GetProtectionDomain(jvmtiEnv* jvmti, JNIEnv* jni_env, jclass klass, cons
 		logger->debug("[%s] Got ProtectionDomain for %s", cwd, class_sig);
 	}
 	
-	
 	return ProtectionDomainObject;
 }
 
