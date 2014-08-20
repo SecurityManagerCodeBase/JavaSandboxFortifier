@@ -1,7 +1,7 @@
 JavaSandboxFortifier
 ========================
 
-JavaSandboxFortifier (JSF) is a JVMTI agent that checks for privilege escalation attacks in running Java applications and optionally monitors changes to the System class's SecurityManager for a running Java application and stops potentially malicious operations.
+JavaSandboxFortifier (JSF) is a JVMTI agent that checks for privilege escalation attacks in running Java applications. JSF optionally monitors changes to the System class's SecurityManager for a running Java application and stops potentially malicious operations.
 
 Build Dependencies
 --------------------------------
@@ -35,6 +35,15 @@ You can quickly set the necessary environment variables to cause JSF to attach t
 
 You can uninstall JSF by removing these environment variables. Running unsetenv.bat performs this operation.
 
+Note that if you have a requirement to run both 64-bit and 32-bit JRE's you must have both a 64-bit and a 32-bit version of JSF available. It is often the case that users that require both bitnesses will only require one of the bitnesses (e.g. 32-bit) to support a legacy application that is dependent on the use of the JNI to execute native code where only 32-bit binaries are available (e.g. to use a third-party, native, and 32-bit DLL). In these cases it is best to run setenv.bat for a version of JSF for the primary bitness (e.g. 64-bit) and write wrapper scripts for the legacy (32-bit) Java applications to set JAVA_TOOL_OPTIONS to point to the appropriate (32-bit) version of JSF solely for the execution of the 32-bit application. Such a script may look something like this as a Windows batch file:
+
+@echooff
+JARS="[jar_dependencies_here]"
+SET JAVA_TOOL_OPTIONS=-agentpath:"%ProgramFiles(x86)%\jsf\libjsf.dll"
+start "" "C:\Program Files (x86)\Java\jre7\bin\javaw.exe" -cp %JARS% [main_class_for_app_with_32-bit_dependency]
+
+The value of JSF_HOME does not need to be changed as this will ensure the 64-bit and 32-bit versions of JSF will run with the same settings.
+
 Always Attach JavaSandboxFortifier
 --------------------------------
 
@@ -43,19 +52,20 @@ To ensure the agent is attached to every Java application that is executed on a 
 Configuring JavaSandboxFortifier
 --------------------------------
 
-The log.properties, jsf.properties, and libjsf.(dll|so) files should all be in the same directory and this directory should be set as the value of an environment variable called JSF_HOME (e.g. JSF_HOME=C:\jsf). JSF_HOME is required by JSF to find its properties files because the current working directory (CWD) changes depending on what application JSF is attached to. If you do not set this environment variable, JSF will attempt to find the properties files in the CWD.
+The log.properties, jsf.properties, and libjsf.(dll|so) files should all be in the same directory and this directory should be set as the value of an environment variable called JSF_HOME (e.g. JSF_HOME=C:\jsf). JSF_HOME is required by JSF to find its properties files because the current working directory (CWD) changes depending on what application JSF is attached to. If you do not set this environment variable, JSF will attempt to find the properties files in the CWD and will often fail, thus terminating both JSF and the Java application it is attached to.
 
 JSF uses log4cpp for logging purposes, which is configured via the log.properties file. See:
 
 http://log4cpp.sourceforge.net/#propfile
 http://log4cpp.sourceforge.net/api/hierarchy.html
 
-Finally, JSF itself is configured via jsf.properties. This file has two settings: mode and popups.show: 
+Finally, JSF itself is configured via jsf.properties. This file has three settings: mode, popups.show, and paranoid.checks: 
 
--mode can be set to either monitor or enforce. In monitor mode JSF will log messages about changes to the SecurityManager*. In enforce mode, JSF will log changes and forcibly shutdown any application that modifies the SecurityManager in a way that is malicious. Enforce mode follows several rules:
---If the SecurityManager was never set, setting it to NULL produces a log message, but JSF takes no further actions because this case represent a no-op.
---If the SecurityManager is not currently set but is being set to a SecurityManager that is permissive (i.e. one that allows operations that would let even code subject the manager's security policy disable or change the manager or change the policy), JSF drops to monitor mode. If an application sets its initial manager to one that is permissive, there is nothing JSF can do to protect it in enforce mode.
---Assuming the SecurityManager was set to one that is not permissive, any further changes to the manager result in termination of the Java application.
+-mode can be set to either monitor or enforce. In monitor mode JSF will log messages about malicious operations intended to bypass the Java Sandbox. In enforce mode, JSF will log malicious operations and forcibly shutdown the application that performed them.
 -popups.show can be set to either true or false. If true, JSF will show the user a popup describing why a Java application is being terminated before it is terminated. Servers should set this option to false.
+-paranoid.checks can be set to either true or false. If true, JSF will check for privilege escalation (on by default) and will monitor access and changes to the SecurityManager*. These checks turn off the JIT in most JRE's and add quite a bit of overhead in addition to the forced interpretation of the Java application. With paranoid.checks off JSF adds 1-2% overhead to the execution of a Java application it is attached to. With paranoid.checks on the overhead is 12-15x, but can be substantially higher. We recommend only turning on these checks in environments that require extra security or where users only use Java to run the occasional Applet in their browser or other non-performance critical Java applications. With paranoid.checks on and the mode set to enforce, JSF will terminate any Java application it is attached to that performs a malicious operation on a SecurityManager. With mode set to enforce, the following rules are followed:
+--If the SecurityManager was never set, setting it to NULL produces a log message, but JSF takes no further actions because this case represents a no-op.
+--If the SecurityManager is not currently set but is being set to a SecurityManager that is permissive (i.e. one that allows operations that would let even code subject to the manager's security policy disable or change the manager or change the policy), JSF drops to monitor mode. If an application sets its initial manager to one that is permissive, there is nothing JSF can do to protect it in enforce mode.
+--Assuming the SecurityManager was set to one that is not permissive, any further changes to the manager result in termination of the Java application.
 
 *Note that JSF will only monitor changes to the SecurityManager stored in java.lang.System's security field. If manager is stored some other way, it is not an official manager and will not be utilized by JRE classes.
