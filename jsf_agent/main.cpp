@@ -66,7 +66,8 @@ enum jsf_mode_t {MONITOR, ENFORCE};
 
 struct options {
 	jsf_mode_t mode;
-	bool popups_show;  
+	bool popups_show; 
+	bool paranoid_checks;
 };
 
 options opt;
@@ -133,16 +134,21 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	capabilities.can_get_line_numbers = 1;
 	capabilities.can_get_source_file_name = 1;
 
-	// Enable capability to receive events for field modifications/reads and the events themselves                
-	capabilities.can_generate_field_modification_events = 1;
-	capabilities.can_generate_field_access_events = 1;
-
+	if (opt.paranoid_checks == true) {
+		// Enable capability to receive events for field modifications/reads and 
+		// the events themselves                
+		capabilities.can_generate_field_modification_events = 1;
+		capabilities.can_generate_field_access_events = 1;
+	}
+	
 	error = jvmti->AddCapabilities(&capabilities);
 	check_jvmti_error(jvmti, error, "Unable to get necessary JVMTI capabilities.");
 
-	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_MODIFICATION, NULL);
-	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_MODIFICATION.");
-
+	if (opt.paranoid_checks == true) {
+		error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_MODIFICATION, NULL);
+		check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_MODIFICATION.");
+	}
+	
 	// Enable VMInit event so that we know when the JVM is initialized and we 
 	// can finish the rest of the setup
 	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_VM_INIT, NULL);
@@ -150,11 +156,14 @@ JNIEXPORT jint JNICALL Agent_OnLoad(JavaVM* jvm, char* options, void* reserved) 
 	
 	callbacks.VMInit = &VMInit;
 
-	// Set a callback to receive events when the security field of System is set or read.
-	// This will let us see when the security manager is being changed or when a type
-	// confusion attack may be taking place.
-	callbacks.FieldModification = &FieldModification;
-	callbacks.FieldAccess = &FieldAccess;
+	if (opt.paranoid_checks == true) {
+		// Set a callback to receive events when the security field of System is set or read.
+		// This will let us see when the security manager is being changed or when a type
+		// confusion attack may be taking place.
+		callbacks.FieldModification = &FieldModification;
+		callbacks.FieldAccess = &FieldAccess;
+	}
+	
 	// Set a callback to receive events when a class is prepared to check for privilege
 	// escalation.
 	callbacks.ClassPrepare = &ClassPrepare;
@@ -174,7 +183,15 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 	jclass System;
 	jfieldID securityID; 
 	jvmtiError error;
+	
+	error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, NULL);
+	check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_CLASS_PREPARE.");
 
+	// This is called once here to initialize static values
+	IsRestrictedAccessPackage(jni_env, "");
+	
+	if (opt.paranoid_checks == false) return;
+	
 	// Get the security field of the System class (holds the SecurityManager)
 	System = jni_env->FindClass("Ljava/lang/System;");
 	check_jni_error(jvmti, jni_env, System, "Unable to get System class.");
@@ -200,9 +217,6 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 
 	error = jvmti->SetFieldAccessWatch(System, securityID);
 	check_jvmti_error(jvmti, error, "Unable to set a watch on reads of security field of System class.");
-	
-	// This is called once here to initialize static values
-	IsRestrictedAccessPackage(jni_env, "");
 }
 
 /**
@@ -213,7 +227,8 @@ void JNICALL VMInit(jvmtiEnv *jvmti, JNIEnv* jni_env, jthread thread) {
 bool GetOptions() {
 	std::string mode;
 	std::string popups_show;
-
+	std::string paranoid_checks;
+	
 	// Build path to jsf properties
 	std::string jsfProperties;
 	if (JSF_HOME != NULL) {
@@ -236,7 +251,8 @@ bool GetOptions() {
 	boost::program_options::options_description desc("Options");
 	desc.add_options()
 		("mode", boost::program_options::value<std::string>(&mode), "mode")
-		("popups.show", boost::program_options::value<std::string>(&popups_show), "popups.show");
+		("popups.show", boost::program_options::value<std::string>(&popups_show), "popups.show")
+		("paranoid.checks", boost::program_options::value<std::string>(&paranoid_checks), "paranoid.checks");
 	boost::program_options::variables_map vm = boost::program_options::variables_map();
 
 	boost::program_options::store(boost::program_options::parse_config_file(settings_file , desc), vm);
@@ -261,6 +277,15 @@ bool GetOptions() {
 		return false;
 	}
 
+	if (strcasecmp(paranoid_checks.c_str(), "TRUE") == 0) {
+		opt.paranoid_checks = true;
+	} else if (strcasecmp(paranoid_checks.c_str(), "FALSE") == 0) {
+		opt.paranoid_checks = false;
+	} else {
+		logger->fatal("[%s] Option value unknown: %s. Terminating...", cwd);
+		return false;
+	}
+	
 	return true;
 }
 
@@ -579,14 +604,12 @@ void JNICALL FieldModification(jvmtiEnv* jvmti, JNIEnv* jni_env,
 				cwd);
 		}
 		
-	// New non-permissive SecurityManager so start checking for Privilege Escalation
+	// New non-permissive SecurityManager so start checking for type confusion
 	} else {
-		logger->info("[%s] A restrictive SecurityManager has been set. Turning on privilege" 
-			" escalation and type confusion detection...", cwd);
-		jvmtiError error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, NULL);
-		check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_CLASS_PREPARE.");
+		logger->info("[%s] A restrictive SecurityManager has been set. Turning on type confusion detection...",
+			cwd);
 		
-		error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_ACCESS, NULL);
+		jvmtiError error = jvmti->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_FIELD_ACCESS, NULL);
 		check_jvmti_error(jvmti, error, "Unable to set JVMTI_EVENT_FIELD_ACCESS.");
 	}
 
