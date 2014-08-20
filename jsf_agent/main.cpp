@@ -814,7 +814,32 @@ bool IsRestrictedAccessPackage(JNIEnv* jni_env, const char* class_sig) {
 	
 	return false;
 }
- 
+
+bool IsSecurityManagerSet(jvmtiEnv* jvmti, JNIEnv* jni_env) {
+	if (opt.paranoid_checks) {
+		if (lastSecurityManagerRef == NULL) return false;
+		else return true;
+	} else {
+		static jclass System = NULL;
+		static jmethodID getSecurityManager = NULL;
+		jvmtiError error;
+		
+		if (System == NULL) {
+			System = jni_env->FindClass("Ljava/lang/System;");
+			check_jni_error(jvmti, jni_env, System, "Unable to get System class to call getSecurityManager.");
+
+			getSecurityManager = jni_env->GetStaticMethodID(System, "getSecurityManager", 
+				"()Ljava/lang/SecurityManager;");
+			check_jni_error(jvmti, jni_env, getSecurityManager, "Unable to ID for getSecurityManager.");
+		} else {
+			jobject SecurityManagerObject = jni_env->CallStaticObjectMethod(System, getSecurityManager);
+			
+			if (SecurityManagerObject == NULL) return false;
+			else return true;
+		}
+	}
+}
+
 void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jclass klass)
 {
 	jboolean is_interface, is_array;
@@ -825,6 +850,10 @@ void JNICALL ClassPrepare(jvmtiEnv* jvmti, JNIEnv* jni_env, jthread thread, jcla
 	jint retrieved_frame_count = 0;
 	jvmtiError error; 
 	jobject CallerProtectionDomainObject = NULL;
+	
+	// No point in checking for privilege escalation if there is no SecurityManager
+	// causing a division in privileges.
+	if (!IsSecurityManagerSet(jvmti, jni_env)) return; 
 		
 	jvmti->IsInterface(klass, &is_interface);
 	jvmti->IsArrayClass(klass, &is_array);
