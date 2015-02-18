@@ -27,7 +27,7 @@
 #include <log4cpp/PropertyConfigurator.hh>
 #include <boost/program_options.hpp>
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
   #include <dlfcn.h>
 #endif
 
@@ -703,7 +703,7 @@ jobject GetProtectionDomain(jvmtiEnv* jvmti, JNIEnv* jni_env, jclass klass, cons
 		} else {
 			ProtectionDomainObject = JVM_GetProtectionDomain(jni_env, klass);
 		}
-	#elif defined(__linux__)
+#elif defined(__linux__) || defined (__APPLE__)
 		void* jvm = dlopen("libjvm.so", RTLD_LAZY);
 		
 		if (jvm == NULL) {
@@ -715,6 +715,7 @@ jobject GetProtectionDomain(jvmtiEnv* jvmti, JNIEnv* jni_env, jclass klass, cons
 		*(void **)(&JVM_GetProtectionDomain) = dlsym(jvm, "JVM_GetProtectionDomain");
 		
 		jobject ProtectionDomainObject = JVM_GetProtectionDomain(jni_env, klass);
+
 	#endif
 	
 	if (ProtectionDomainObject == NULL) {
